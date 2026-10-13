@@ -19,7 +19,7 @@ public record WindowInfo(long Handle, string Title, string ProcessName, bool Min
 
 /// <summary>
 /// The window and system actions behind the radial menu, so a gamepad can drive Windows itself:
-/// list open windows and bring one to the TV, close one, launch a handful of shell shortcuts,
+/// list open windows and bring one to the TV, close one, find the window a shortcut opened,
 /// park the pointer, and blank or wake the displays.
 /// </summary>
 public class WindowService
@@ -203,58 +203,56 @@ public class WindowService
     }
 
     /// <summary>
-    /// Start one of the Power Wheel's shortcuts. False when it could not be started.
-    /// <paramref name="started"/> is the process when a program was started directly (Explorer,
-    /// the mixer), so the caller can hand it the foreground; the Settings pages
-    /// are URIs and have none.
+    /// How the window a shortcut opens is told apart from every other window: by the process that
+    /// was started, by the program behind it -- ActionService.ExeOf looks inside a Store app's frame
+    /// -- or, for something started through the shell with no exe to go by, by being a new window
+    /// of a process that only began after the start. Built by ShortcutService for each start.
     /// </summary>
-    public bool RunShortcut(string id, out Process? started)
+    public sealed class ShortcutWindow
     {
-        started = null;
-        try
+        /// <summary>Exe names, lower case and without ".exe", whose windows count.</summary>
+        public HashSet<string> Exes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The process that was started, when it is known.</summary>
+        public uint Pid { get; set; }
+        /// <summary>A window that was already open may be the answer: Settings, the mixer, a browser
+        /// and most Store apps bring their one window forward rather than open another. Explorer
+        /// opens a new one every time, so for it only a new one will do.</summary>
+        public bool AllowExisting { get; init; } = true;
+        /// <summary>Only windows of this class: Explorer's own desktop and taskbar are explorer.exe too.</summary>
+        public string? Class { get; init; }
+        /// <summary>A Store app's frame belongs to ApplicationFrameHost until the app inside it has
+        /// attached, so a frame that has only just appeared counts.</summary>
+        public bool FreshFrame { get; init; }
+        /// <summary>A new window of any process started after this moment counts.</summary>
+        public DateTime? StartedAfter { get; init; }
+
+        internal bool Matches(IntPtr hwnd, bool fresh)
         {
-            switch (id)
+            NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+            bool hit = Pid != 0 && pid == Pid;
+            if (!hit)
             {
-                case "explorer": started = Start("explorer.exe"); break;
-                case "settings": started = Start("ms-settings:"); break;
-                case "displaySettings": started = Start("ms-settings:display"); break;
-                case "volume": started = Start("sndvol.exe"); break;
-                case "lock": Process.Start("rundll32.exe", "user32.dll,LockWorkStation"); break;
-                default: Log.Info($"Radial: unknown shortcut {id}"); return false;
+                var exe = ActionService.ExeOf(hwnd);
+                hit = Exes.Contains(exe)
+                      || (fresh && FreshFrame && exe == "applicationframehost")
+                      || (fresh && StartedAfter is { } after && ProcessStartedAfter(pid, after));
             }
-            return true;
+            if (!hit || Class is null) return hit;
+            var cls = new StringBuilder(64);
+            NativeMethods.GetClassName(hwnd, cls, cls.Capacity);
+            return cls.ToString() == Class;
         }
-        catch (Exception ex)
-        {
-            Log.Info($"Radial shortcut {id} failed: {ex.Message}");
-            return false;
-        }
-    }
 
-    /// <summary>Whether a shortcut puts up a window to bring forward. Lock hands the session to
-    /// the lock screen instead.</summary>
-    public static bool OpensWindow(string id) =>
-        id is "explorer" or "settings" or "displaySettings" or "volume";
-
-    /// <summary>
-    /// Whether a window is the program a shortcut opens, by the program behind it -- ExeOf looks
-    /// inside a Store app's frame. Settings' frame belongs to ApplicationFrameHost until the app
-    /// inside has attached, so a frame that has only just appeared counts as Settings. Explorer's
-    /// own desktop and taskbar are explorer.exe as well, hence the window class.
-    /// </summary>
-    private static bool IsShortcutWindow(string id, IntPtr hwnd, bool fresh)
-    {
-        var exe = ActionService.ExeOf(hwnd);
-        switch (id)
+        private static bool ProcessStartedAfter(uint pid, DateTime after)
         {
-            case "volume": return exe == "sndvol";
-            case "settings":
-            case "displaySettings": return exe == "systemsettings" || (fresh && exe == "applicationframehost");
-            case "explorer":
-                var cls = new StringBuilder(64);
-                NativeMethods.GetClassName(hwnd, cls, cls.Capacity);
-                return exe == "explorer" && cls.ToString() == "CabinetWClass";
-            default: return false;
+            var h = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, (int)pid);
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                return NativeMethods.GetProcessTimes(h, out var created, out _, out _, out _)
+                       && DateTime.FromFileTimeUtc(created) >= after;
+            }
+            finally { NativeMethods.CloseHandle(h); }
         }
     }
 
@@ -271,15 +269,15 @@ public class WindowService
     }
 
     /// <summary>
-    /// The window a shortcut opened, once it is up: a new one of its program's, or, after a moment,
-    /// one already open that the second start brought forward instead -- Task Manager, Settings and
-    /// the mixer keep a single window, while Explorer always opens another, so for Explorer only a
-    /// new one will do. Zero when nothing turns up in <paramref name="timeout"/>, or as soon as
-    /// <paramref name="wanted"/> says the window is no longer wanted (Loungepad was brought back).
+    /// The window a shortcut opened, once it is up: a new one, or, after a moment, one already open
+    /// that the second start brought forward instead, where <see cref="ShortcutWindow.AllowExisting"/>
+    /// says that is how the program behaves. Zero when nothing turns up in
+    /// <paramref name="timeout"/>, or as soon as <paramref name="wanted"/> says the window is no
+    /// longer wanted (Loungepad was brought back).
     /// </summary>
-    public async Task<IntPtr> WaitForShortcutWindow(string id, HashSet<IntPtr> before, TimeSpan timeout, Func<bool> wanted)
+    public async Task<IntPtr> WaitForShortcutWindow(ShortcutWindow match, HashSet<IntPtr> before, TimeSpan timeout, Func<bool> wanted)
     {
-        bool single = id != "explorer";
+        bool single = match.AllowExisting;
         var start = DateTime.UtcNow;
         while (DateTime.UtcNow - start < timeout && wanted())
         {
@@ -287,7 +285,7 @@ public class WindowService
             // Brought itself forward, as a program started by the foreground process may.
             var fg = NativeMethods.GetForegroundWindow();
             if (fg != IntPtr.Zero && fg != _ownWindow && (single || !before.Contains(fg))
-                && IsShortcutWindow(id, fg, fresh: !before.Contains(fg)))
+                && match.Matches(fg, fresh: !before.Contains(fg)))
                 return fg;
 
             IntPtr fresh = IntPtr.Zero, existing = IntPtr.Zero;
@@ -295,7 +293,7 @@ public class WindowService
             {
                 if (hwnd == _ownWindow || !NativeMethods.IsWindowVisible(hwnd) || !IsAltTabWindow(hwnd)) return true;
                 bool isNew = !before.Contains(hwnd);
-                if (!IsShortcutWindow(id, hwnd, isNew)) return true;
+                if (!match.Matches(hwnd, isNew)) return true;
                 if (isNew) { fresh = hwnd; return false; }
                 if (existing == IntPtr.Zero) existing = hwnd;   // the top one: EnumWindows goes in z-order
                 return true;
@@ -580,7 +578,4 @@ public class WindowService
         else
             NativeMethods.PostMessage(NativeMethods.HWND_BROADCAST, NativeMethods.WM_SYSCOMMAND, new IntPtr(NativeMethods.SC_MONITORPOWER), new IntPtr(state));
     }
-
-    private static Process? Start(string target) =>
-        Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
 }

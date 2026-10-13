@@ -618,8 +618,9 @@ public class GameLaunchService
     }
 
     /// <summary>The first visible top-level window of the game's that is big enough to be the
-    /// game rather than a splash or a tooltip, or zero.</summary>
-    private IntPtr FindGameWindow()
+    /// game rather than a splash or a tooltip, or zero. Also the Power Wheel's way back to a game
+    /// that is already running when its shortcut is pressed.</summary>
+    internal IntPtr FindGameWindow()
     {
         var found = IntPtr.Zero;
         NativeMethods.EnumWindows((hwnd, _) =>

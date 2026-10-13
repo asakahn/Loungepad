@@ -107,6 +107,9 @@ internal static class NativeMethods
     /// launcher parks, not after.</summary>
     [DllImport("user32.dll")]
     public static extern bool AllowSetForegroundWindow(uint dwProcessId);
+    /// <summary>For <see cref="AllowSetForegroundWindow"/>: every process, for a start through the
+    /// shell that names none.</summary>
+    public const uint ASFW_ANY = 0xFFFFFFFF;
 
     [DllImport("user32.dll")]
     public static extern bool BringWindowToTop(IntPtr hWnd);

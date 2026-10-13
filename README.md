@@ -63,10 +63,14 @@ Most couch launchers stop once a game starts. Loungepad covers everything after 
 - **The left stick is the mouse**, the right stick scrolls, and A and B click, anywhere in Windows.
   A DualSense touchpad works like a laptop's.
 - **The Power Wheel.** Tap the Xbox button (PS or Home on other pads) anywhere, even mid-game, to
-  switch windows, close what's stuck, jump to File Explorer or Settings, or rest the TV. Hold it to
-  bring Loungepad back.
+  switch windows, close what's stuck, open your shortcuts, or rest the TV. Hold it to bring
+  Loungepad back.
+- **Wheels of your own shortcuts**: apps (Store apps too), games, folders, files, websites,
+  commands and scripts, Windows settings and power actions, a tab to a wheel. Arrange them in
+  Settings → Shortcuts, or give one a button.
 - **App shortcuts on your controller**, ready for browsers, Spotify, VLC, Discord, File Explorer
-  and more, or add your own. Pick one from the Power Wheel or give it a button.
+  and more, or add your own. Pick one from the Power Wheel or give it a button, and arrange each
+  app's wheel and its tabs in Settings → Actions.
 - **An on-screen keyboard built for controllers.** View (Create on a DualSense) raises it anywhere
   in Windows, with word suggestions.
 - **It rests like a console.** Put the controller down and the TV goes dark and the game pauses;

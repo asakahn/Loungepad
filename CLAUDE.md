@@ -2017,6 +2017,72 @@ Stop the scrolled grid from clipping through the All games header
   action wheel's pager can have the strip under the bottom spoke and the legend does not move
   between the two.
 
+## Shortcuts: the Power Wheel's own wheels
+
+- **The Shortcuts spoke opens a wheel the user arranges** (Oct 13 2026, the user's ask; branch
+  `shortcut-wheels`; `docs/SHORTCUTS.md` is the design). Tabs of up to eight, spread evenly like the
+  action wheel (the user picked flowing over fixed slots), plain named tabs (no per-app tabs), an
+  optional button per shortcut, and the editor in Settings → Shortcuts is the wheel itself. **Y
+  moves, X is the tab options** (the user's calls, Oct 13 2026, after Menu and then the swap), and
+  Remove lives in the edit sheet and on Delete.
+- **A control the pointer cannot highlight cannot be pressed from the pad.** In the launcher a pad's
+  A is the page's A, never a click, and the joystick mouse only moves the pointer; hover makes a
+  focusable the highlight and A presses the highlight. The tab strip's + New tab was a plain
+  clickable and worked with a real mouse only (the user's report). Every control in the strip is a
+  `data-focusable` now, outside the D-pad's way (`scStripUnderPointer`, `scStripAct`). The Add-ons
+  tab strip is still plain clickables.
+- **Icons are Automatic or a picture from the PC** (the user's call: no list of glyphs).
+  `ShortcutIcons` makes any WIC picture, .ico or program icon a PNG of at most 128 px in
+  `shortcut-icons` beside shortcuts.json (`ic-<id>-<rand>.png`, `IconFile`), and fetches a website's
+  icon from the site itself (`fav-<host hash>.png`, one per site, asked once). Prune deletes only
+  those two name shapes. `ShortcutIcons.Dir` follows the file the service was given, so a harness on
+  a scratch file never tidies the real folder.
+- `shortcuts.json` is the whole layout, seeded from `ShortcutCatalog.Defaults` (the old six, in
+  order), changed only by the `shortcut*` commands and NOT in `CopySettings`. `ShortcutService.Clean`
+  checks everything the page or a hand edit sends: http(s) only, full paths, catalogue ids, a picture
+  name in its own shape (never a path). Sign out, restart and shut down always ask, and the host enforces it:
+  `shortcutRun` without `confirmed` brings Loungepad up and pushes `shortcutAsk`.
+- **`overlay-shortcuts` sits BEFORE `overlay-confirm`** in index.html so the power actions' and the
+  game swap's question paints over the wheel. **`overlay-choice` sits before `overlay-form`**, so a
+  list opened from the edit sheet is drawn under it: `scFromForm` closes the sheet and reopens it on
+  the same row afterwards. Move either overlay and one of the two breaks.
+- **The editor is `wheeledit.js`, and Settings → Actions uses the same one** (an app's wheel; see
+  the Actions notes). It draws into Settings' scroller from `renderSettings` (an early return after
+  the pointer logic, when `activeWheelModel()` names a model) and its spokes are the focusables;
+  `settingsInput` hands every button to `weInput`, so the D-pad goes round the ring and Left does
+  NOT cross to the categories there (B does). Spokes are kept by id and moved, so a move slides; a
+  hover never rebuilds them. What differs between the two is a model object (`scModel` in
+  shortcuts.js, `acModel` in actions.js): the tabs, the spoke and card markup, the edit sheet, the
+  add flow, the bridge commands. A fix to moving, dragging, the strip or the tab options is one
+  fix for both.
+- The page edits its copy first; a host push that lands while a shortcut is picked up waits in
+  `scUi.pending`, or an icons push would put the list back under the hand.
+- Shortcut buttons ride in `ActionService`'s snapshot at Everywhere's rank: an app's own action
+  wins in its app, and Everywhere and a shortcut never share a button (both capture checks refuse
+  it; `bindingIssues` with no app is the system rules alone). A press raises `ShortcutFired` on the
+  pad thread; the bridge runs it as a wheel pick with `confirmed` false.
+- Start menu apps are `shell:AppsFolder` (`ShellApps`, COM on an STA thread of its own): a packaged
+  app's id is its AUMID and starts through `IApplicationActivationManager`, which returns the pid;
+  a desktop one starts as `shell:AppsFolder\<id>`. Icons come from `IShellItemImageFactory` as a
+  premultiplied 32-bit DIB read through `GetDIBits`; WPF's `CreateBitmapSourceFromHBitmap` would
+  drop the alpha. The picker's icons become blob URLs, because `renderMenu` rebuilds every row on
+  every step and a few hundred data URIs in the markup made each step slow.
+- **A bound button is a row inside the bottom of its spoke** (`spokeBtnHtml` in actions.js, both
+  wheels and the editor; the user's report, Oct 13 2026). It was a badge hung off the corner, and
+  `.radial-item span` -- meant for the spoke's label -- padded every button picture and "+" in it by
+  12px a side: a five-button chord drew at four times the spoke's width. That rule is
+  `.radial-item > span` now; the pictures shrink with the chord's length (`--btn-h`), the row is
+  never wider than the spoke, and in the editor a spoke with a button keeps its name to one line.
+  Measured in the preview: 1 to 5 buttons inside the spoke on all three.
+- `WindowService.ShortcutWindow` replaced the id `switch`; the old six keep their exact rules
+  (Explorer new windows only and `CabinetWClass`, Settings' fresh frame, the mixer by exe).
+- Verified Oct 13 2026: 83 harness checks (scratch project over Loungepad.dll, real log held shut;
+  pictures, tidying, and live favicons from GitHub, YouTube and Wikipedia included),
+  the preview through every picker, move, drag and tab option, and a windowed Debug build over CDP
+  (payload on ready, 246 Start menu apps, save/remove through the bridge, the Volume Mixer opened
+  from the wheel and in front). Not tried on hardware: a shortcut's button on a real pad, and
+  launching a packaged app from the wheel.
+
 ## Actions: an app's shortcuts on the pad
 
 - **The wheel acts on the window that was in front when the Power Wheel opened.** `ShowOverlay`
@@ -2067,12 +2133,39 @@ Stop the scrolled grid from clipping through the All games header
   fixed order (`ActionService.ButtonOrder`, LT RT LB RB LS RS View Menu Guide A B X Y then the
   D-pad) and `CleanButton` normalises whatever the page sends to the same, so "Y + LB" and
   "LB + Y" are one binding. The page's `normCombo` does the same.
-- **`actions.json` holds only what differs from the packs**: a pack app's entry lists the actions
-  the user touched (full copies, by id) and their own; untouched defaults come from
-  `ActionPacks.All` at every load, so a new default arrives on the next build. `Reset` deletes the
-  entry. A custom app is any entry whose id is not a pack's; a pack added by hand is `Pinned`,
-  so it shows whether or not detection finds the program. Ids are exe names, lower case, no
-  extension, so a hand-added chrome.exe IS the Chrome pack.
+- **`actions.json` holds only what differs from the packs** (`ActionAppFile`, version 2): a pack
+  app's entry lists the actions the user changed (full copies, by id) and made, the pack actions
+  taken off the wheel (`Removed`), and the layout (`Tabs`, by id) only once the user has arranged
+  something -- until then the pack's own tabs are used, so a better arrangement in a later build
+  reaches everyone who never touched theirs. `Resolve` merges it: an action on no tab and not
+  removed (a default newer than the layout, a v1 user action) goes on the tab the pack has it on,
+  else the last tab with room, else a new "More" tab. Every arranging edit first writes the
+  layout out as it is drawn (`Arrange`); `Tidy` forgets a layout that equals the pack's and drops
+  an entry with nothing left in it. `Reset` keeps the pin. A custom app is any entry whose id is
+  not a pack's; a pack added by hand is `Pinned`, so it shows whether or not detection finds the
+  program. Ids are exe names, lower case, no extension, so a hand-added chrome.exe IS the Chrome
+  pack. Tabs hold eight, an app twelve (`ActionPacks.MaxItems` / `MaxTabs`).
+- **There is no "keep it off the wheel" any more** (the user's call, Oct 13 2026: it brought
+  nothing tabs do not). Everything an app has is on a tab or taken off; a taken-off pack action is
+  `spare` in the payload and offered first by the + spoke, a user's own is deleted. A v1 file is
+  migrated on load (`Migrate`): a pack action that was hidden becomes removed, unless it has a
+  button, which has to keep working, so it stays on; the user's own all stay on. The flag is read
+  through `ActionDef.Hidden` and never written again. Everywhere's D-pad arrows, hidden before, are
+  its Arrows tab: their buttons are what make the D-pad arrow keys on the desktop.
+- **Every pack action carries a description** (`ActionDef.Desc`; the user's ask, Oct 13 2026: for
+  people still learning shortcuts), drawn in the action wheel's centre (`#actionsDesc`, the
+  Power Wheel's two-line `.radial-desc` slot, clamped) and on the Settings card; the edit sheet
+  has a Description row. Pack descriptions stay within 80 characters so they fit those two lines
+  (measured: the longest 21 all do at 366px); one typed in Settings is capped at 120 and clamped
+  with an ellipsis in the centre. A changed pack action with no description has the pack's, and the
+  pack's own words sent back are not stored (`Update` nulls them), so a better sentence in a later
+  build still reaches it; emptying the row brings the pack's back. The preview mock's copy of the
+  packs is printed by `node tools\mock-action-packs.mjs` -- regenerate it after changing a pack.
+- **The live wheel's pager names whose each tab is**: every tab is led by its app's icon
+  (`actionAppIconHtml`: the globe for Everywhere, the program's icon, or its first letter) and a
+  rule (`.actions-pages-div`) stands where one app's tabs end and Everywhere's begin. The row is
+  1040px wide (`.sc-pages.actions-pages`; the Shortcuts wheel keeps 640), so a browser's three and
+  Everywhere's four fit without scrolling.
 - Detection (`Detect`, off the UI thread after `ready` and on every add) is App Paths, the uninstall
   entries (`EmulatorDetection.RegistryExes`, made internal for it), a few known folders, the
   Store's execution aliases, the library's emulators, and the running processes. Icons come from
@@ -2087,11 +2180,13 @@ Stop the scrolled grid from clipping through the All games header
 - On the page, `actionWheelOpen`, `captureState`, `keyPick` and `overlayTargetProcess` are declared
   in app.js, not actions.js: app.js reads them while it boots, and a `let` in a later script is
   in its temporal dead zone until that script runs — `typeof` does not save you from that.
-- The Settings category is three levels in one pane (`actionsUi.level`: apps grid, an app's list,
-  an action's editor). The grid is the same scroller with `.apps-grid`; tiles are rows with
-  `tile: true` so `settingsInput`, `syncSettingsPane` and the highlight keys work unchanged. The
-  level is part of the scroller's `shape`, or a drill-down with the same row count would not
-  rebuild. B climbs one level (`actionsBack`) before it reaches the categories.
+- The Settings category is two levels in one pane (`actionsUi.level`: the apps grid, then an app's
+  wheel in the wheel editor, `acModel`). The grid is the same scroller with `.apps-grid`; tiles are
+  rows with `tile: true` so `settingsInput`, `syncSettingsPane` and the highlight keys work
+  unchanged. B on a wheel goes back to the grid on that app's tile (`actionsBack`). The app's own
+  options (restore defaults, rename or remove an app the user added) are under the tab options, X.
+  The live wheel's pages are the app's tabs then Everywhere's, empty ones left out, the pager naming
+  them (`centerPager` keeps the one in force in view, both wheels).
 - The key picker takes a real keyboard too (capture-phase keydown in actions.js, before app.js's
   own key map turns X into a pad button). A bare letter is the key; bare Esc/Enter/arrows/Space
   still navigate. In the browser preview, **P** opens the Power Wheel over "Firefox" and **O**
@@ -2099,7 +2194,11 @@ Stop the scrolled grid from clipping through the All games header
 - The harness for the host side is a scratch console project referencing
   `bin\Debug\...\Loungepad.dll` and reaching the internal types by reflection, with `SendKeys`
   replaced: 64 checks over the parser, the packs, the chord logic and the file round trip
-  (Sept 2026). It writes the real `actions.json` and puts it back.
+  (Sept 2026). It writes the real `actions.json` and puts it back. The tabs have their own
+  (`ac-harness`, Oct 13 2026, 58 checks): the packs' layout and words, every edit, the v1
+  migration, new defaults landing in a user's layout, buttons only from what is on a wheel.
+  `ActionService` takes a file path for it, so it never touches the real `actions.json` (the run
+  checks it is unchanged).
 
 ## The Loungepad keyboard: blocks, suggestions, options
 

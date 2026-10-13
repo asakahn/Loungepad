@@ -426,6 +426,27 @@
     </div>
   </div>
 
+  <!-- ============ SHORTCUT WHEEL ============
+       The Power Wheel's Shortcuts spoke (shortcuts.js): the user's own shortcuts, a tab to a wheel,
+       LB and RB between tabs. Here rather than beside the other wheels because the power actions
+       and a game swap ask first, and the confirm has to paint over it: overlays stack in document
+       order. -->
+  <div class="overlay" id="overlay-shortcuts">
+    <div class="radial-wrap sc-wrap">
+      <div class="radial-title mono" id="scTitle">SHORTCUTS</div>
+      <div class="radial" id="scRing"></div>
+      <div class="radial-center sc-center">
+        <div class="actions-app mono" id="scKind"></div>
+        <div class="radial-sel" id="scSelName">—</div>
+        <div class="radial-desc" id="scDesc"></div>
+        <div class="radial-target mono" id="scTarget"></div>
+      </div>
+      <!-- Its own row under the ring: the shoulders, and the tabs by name between them. -->
+      <div class="actions-pager sc-pager" id="scPager" hidden></div>
+      <div class="ov-foot radial-foot" id="scFoot"></div>
+    </div>
+  </div>
+
   <!-- ============ CONFIRM ============ -->
   <!-- A dialog rather than a menu: the details, then A to go ahead and B to back out. -->
   <div class="overlay" id="overlay-confirm">
@@ -473,6 +494,7 @@
       <div class="radial-center actions-center">
         <div class="actions-app mono" id="actionsApp"></div>
         <div class="radial-sel" id="actionsSelName">—</div>
+        <div class="radial-desc actions-desc" id="actionsDesc"></div>
         <div class="actions-keys" id="actionsKeys"></div>
         <div class="radial-target mono" id="actionsTarget"></div>
       </div>
@@ -571,7 +593,12 @@
 <script src="themeview.js"></script>
 <script src="app.js"></script>
 <script src="radial.js"></script>
+<!-- How Settings arranges a wheel: Shortcuts and each app's actions are both this editor. -->
+<script src="wheeledit.js"></script>
 <script src="actions.js"></script>
+<!-- The Power Wheel's Shortcuts and Settings → Shortcuts, after actions.js: its buttons use the
+     same capture dialog and checks. -->
+<script src="shortcuts.js"></script>
 <!-- Settings → Add-ons, and what the extensions stored on each game (docs/ADDONS.md). -->
 <script src="addons.js"></script>
 <!-- Play sessions, achievements and the Stats screen, after the rest: it reads app.js's globals. -->

@@ -10,10 +10,13 @@ namespace Loungepad.Models;
 /// The wheel is context aware: which app's actions it shows is decided by the window that was in
 /// front when the Power Wheel opened, matched on the process's exe name. "Everywhere" is the one
 /// app that matches every window and holds what is true of Windows itself -- volume, media keys,
-/// Alt+Tab. Bundled packs (<see cref="ActionPacks"/>) are the starting point for the programs we
-/// know; everything in them can be changed, hidden or given a button, and the file only ever
-/// holds what differs from the pack, so a new default arrives on the next build without
-/// overwriting anything the user set.
+/// Alt+Tab. An app's actions sit on tabs of up to <see cref="ActionPacks.MaxItems"/>, each tab a
+/// wheel of its own (LB/RB turn between them), the app's tabs first and Everywhere's after.
+///
+/// Bundled packs (<see cref="ActionPacks"/>) are the starting point for the programs we know, and
+/// the file only ever holds what differs from the pack (<see cref="ActionAppFile"/>), so a new
+/// default arrives on the next build without overwriting anything the user set. This class is the
+/// resolved app, pack and file merged, as the page and the pad see it.
 /// </summary>
 public class ActionApp
 {
@@ -30,13 +33,29 @@ public class ActionApp
     public bool Custom { get; set; }
     /// <summary>A pack the user added by hand: shown whether or not detection finds the program.</summary>
     public bool Pinned { get; set; }
-    public List<ActionDef> Actions { get; set; } = new();
+    /// <summary>The wheel's tabs, in order; their actions in the order they go round the ring.</summary>
+    public List<ActionTab> Tabs { get; set; } = new();
+    /// <summary>The pack's actions that are on none of the tabs: taken off by the user, and offered
+    /// again when one is added. Always empty for a custom app.</summary>
+    public List<ActionDef> Spare { get; set; } = new();
+
+    /// <summary>Every action on the wheel, tab by tab: what the buttons and the wheel fire.</summary>
+    public IEnumerable<ActionDef> Actions => Tabs.SelectMany(t => t.Actions);
 
     public ActionApp Clone() => new()
     {
         Id = Id, Name = Name, Exes = new List<string>(Exes), Path = Path, Custom = Custom, Pinned = Pinned,
-        Actions = Actions.Select(a => a.Clone()).ToList(),
+        Tabs = Tabs.Select(t => t.Clone()).ToList(), Spare = Spare.Select(a => a.Clone()).ToList(),
     };
+}
+
+public class ActionTab
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public List<ActionDef> Actions { get; set; } = new();
+
+    public ActionTab Clone() => new() { Id = Id, Name = Name, Actions = Actions.Select(a => a.Clone()).ToList() };
 }
 
 public class ActionDef
@@ -50,24 +69,64 @@ public class ActionDef
     /// <summary>A gamepad button or combo -- "Y", "LB + Y" -- that fires this action while the app
     /// is in front and the launcher is not. Null or empty for none.</summary>
     public string? Button { get; set; }
-    /// <summary>Kept off the wheel. The button still works; the row still shows in Settings.</summary>
-    public bool Hidden { get; set; }
+    /// <summary>What it does, in a sentence or two, for someone still learning the shortcut. The
+    /// packs' own are shipped; a changed pack action with none keeps the pack's.</summary>
+    public string? Desc { get; set; }
     /// <summary>Added by the user rather than shipped in the pack.</summary>
     public bool Custom { get; set; }
     /// <summary>Drawn red on the wheel: closes or quits something.</summary>
     public bool Danger { get; set; }
+    /// <summary>A pack's action the user has changed, so the edit sheet can offer the pack's own
+    /// back. Worked out on every load, never stored.</summary>
+    [JsonIgnore] public bool Edited { get; set; }
+    /// <summary>Read, never written: version 1 of actions.json could keep an action off the wheel.
+    /// <see cref="Services.ActionService"/> turns that into a removal when it loads such a file
+    /// (unless the action has a button, which has to keep working) and drops the flag.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Hidden { get; set; }
 
     public ActionDef Clone() => new()
     {
-        Id = Id, Name = Name, Keys = Keys, Button = Button, Hidden = Hidden, Custom = Custom, Danger = Danger,
+        Id = Id, Name = Name, Keys = Keys, Button = Button, Desc = Desc, Custom = Custom, Danger = Danger, Edited = Edited,
     };
 }
 
 /// <summary>What actions.json holds: only what differs from the packs, plus the user's own apps.</summary>
 public class ActionsFileData
 {
-    public int Version { get; set; } = 1;
-    public List<ActionApp> Apps { get; set; } = new();
+    /// <summary>1: one list per app, with actions that could be kept off the wheel. 2: tabs.</summary>
+    public int Version { get; set; } = 2;
+    public List<ActionAppFile> Apps { get; set; } = new();
+}
+
+/// <summary>
+/// One app's entry in actions.json. For a pack it is only the difference: the actions the user
+/// changed (whole copies, by id) and added, the ones taken off the wheel, and the layout once the
+/// user has arranged it -- until then the pack's own tabs are used, so a build that arranges them
+/// better reaches everyone who never did. A custom app keeps everything here.
+/// </summary>
+public class ActionAppFile
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public List<string> Exes { get; set; } = new();
+    public string? Path { get; set; }
+    public bool Pinned { get; set; }
+    /// <summary>Changed pack actions and the user's own, whole.</summary>
+    public List<ActionDef> Actions { get; set; } = new();
+    /// <summary>The tabs as the user arranged them, by action id; null while they are the pack's.</summary>
+    public List<ActionTabLayout>? Tabs { get; set; }
+    /// <summary>Pack actions taken off the wheel, so that a load does not put them back as new ones.</summary>
+    public List<string> Removed { get; set; } = new();
+
+    /// <summary>Nothing but the pin and the path: the pack exactly as shipped.</summary>
+    [JsonIgnore] public bool Untouched => Actions.Count == 0 && Tabs is null && Removed.Count == 0;
+}
+
+public class ActionTabLayout
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public List<string> Items { get; set; } = new();
 }
 
 /// <summary>
@@ -187,6 +246,16 @@ public static class ShortcutKeys
 
     public static bool IsValid(string keys) => Parse(keys) is not null;
 
+    /// <summary>A key as the page writes it, whatever was typed: "t" is "T", "pagedown" is
+    /// "PageDown", "f5" is "F5".</summary>
+    public static string CanonicalKey(string key)
+    {
+        if (key.Length == 1) return key.ToUpperInvariant();
+        if (key.Length is 2 or 3 && (key[0] == 'f' || key[0] == 'F') && key[1..].All(char.IsDigit)) return "F" + key[1..];
+        if (key.Length == 4 && key.StartsWith("Num", StringComparison.OrdinalIgnoreCase) && char.IsDigit(key[3])) return "Num" + key[3];
+        return Named.Keys.FirstOrDefault(k => k.Equals(key, StringComparison.OrdinalIgnoreCase)) ?? key;
+    }
+
     /// <summary>True for a shortcut that needs no particular window in front: media keys, and any
     /// Win chord, which the shell takes whoever has the focus.</summary>
     public static bool IsSystemWide(string keys) => Parse(keys)?.SystemWide ?? false;
@@ -201,75 +270,90 @@ public static class ShortcutKeys
 }
 
 /// <summary>
-/// The packs: what we know the common programs answer to. Every shortcut here is the program's
-/// own default binding; a button is only pre-assigned where the reach is obvious and the button
-/// is free on the desktop (A and B click, RB raises the keyboard, RT boosts the pointer). Hidden
-/// entries are real and bindable, just not worth a spoke on the wheel by default.
+/// The packs: what we know the common programs answer to, laid out on tabs. Every shortcut here is
+/// the program's own default binding; a button is only pre-assigned where the reach is obvious and
+/// the button is free on the desktop (A and B click, View raises the keyboard, RT boosts the
+/// pointer). The first tab is what a hand reaches for most; the rest are there to be found. Each
+/// action says in a sentence what it does, for anyone still learning the shortcuts: it is drawn
+/// in the wheel's centre and on the Settings card, so it stays short enough for two lines there.
 /// </summary>
 public static class ActionPacks
 {
     public const string EverywhereId = "everywhere";
+    /// <summary>Spokes on one tab: at eight they sit a comfortable push of the stick apart.</summary>
+    public const int MaxItems = 8;
+    public const int MaxTabs = 12;
 
-    private static ActionDef A(string id, string name, string keys, string? button = null, bool hidden = false, bool danger = false) =>
-        new() { Id = id, Name = name, Keys = keys, Button = button, Hidden = hidden, Danger = danger };
+    private static ActionDef A(string id, string name, string keys, string desc, string? button = null, bool danger = false) =>
+        new() { Id = id, Name = name, Keys = keys, Desc = desc, Button = button, Danger = danger };
 
-    private static ActionApp App(string id, string name, string[] exes, params ActionDef[] actions) =>
-        new() { Id = id, Name = name, Exes = exes.ToList(), Actions = actions.ToList() };
+    private static ActionTab T(string id, string name, params ActionDef[] actions) =>
+        new() { Id = id, Name = name, Actions = actions.ToList() };
 
-    /// <summary>The browsers share one list; only the odd shortcut differs.</summary>
-    private static ActionDef[] Browser(string downloads, string privateWindow) => new[]
+    private static ActionApp App(string id, string name, string[] exes, params ActionTab[] tabs) =>
+        new() { Id = id, Name = name, Exes = exes.ToList(), Tabs = tabs.ToList() };
+
+    /// <summary>The browsers share one layout; only the odd shortcut differs.</summary>
+    private static ActionTab[] Browser(string downloads, string privateWindow) => new[]
     {
-        A("new-tab", "New tab", "Ctrl+T", "Y"),
-        A("close-tab", "Close tab", "Ctrl+W"),
-        A("reopen-tab", "Reopen closed tab", "Ctrl+Shift+T"),
-        A("next-tab", "Next tab", "Ctrl+Tab"),
-        A("prev-tab", "Previous tab", "Ctrl+Shift+Tab"),
-        A("back", "Back", "Alt+Left", "X"),
-        A("forward", "Forward", "Alt+Right"),
-        A("reload", "Reload", "F5"),
-        A("address", "Address bar", "Ctrl+L"),
-        A("find", "Find in page", "Ctrl+F"),
-        A("fullscreen", "Full screen", "F11"),
-        A("zoom-in", "Zoom in", "Ctrl+="),
-        A("zoom-out", "Zoom out", "Ctrl+-"),
-        A("zoom-reset", "Reset zoom", "Ctrl+0", hidden: true),
-        A("bookmark", "Bookmark this page", "Ctrl+D", hidden: true),
-        A("history", "History", "Ctrl+H", hidden: true),
-        A("downloads", "Downloads", downloads, hidden: true),
-        A("new-window", "New window", "Ctrl+N", hidden: true),
-        A("private", "Private window", privateWindow, hidden: true),
-        A("home", "Home page", "Alt+Home", hidden: true),
+        T("browse", "Browse",
+            A("new-tab", "New tab", "Ctrl+T", "Opens a new tab, ready for an address or a search.", "Y"),
+            A("close-tab", "Close tab", "Ctrl+W", "Closes the tab you are on."),
+            A("back", "Back", "Alt+Left", "Goes back to the page before this one.", "X"),
+            A("forward", "Forward", "Alt+Right", "Goes forward again, after going back."),
+            A("reload", "Reload", "F5", "Loads the page again, to see anything new on it."),
+            A("address", "Address bar", "Ctrl+L", "Selects the address bar, to type an address or a search."),
+            A("find", "Find in page", "Ctrl+F", "Looks for a word or phrase on this page."),
+            A("fullscreen", "Full screen", "F11", "Fills the whole screen with the page. Press it again to go back.")),
+        T("tabs", "Tabs & windows",
+            A("reopen-tab", "Reopen closed tab", "Ctrl+Shift+T", "Brings back the tab you closed last."),
+            A("next-tab", "Next tab", "Ctrl+Tab", "Switches to the tab on the right."),
+            A("prev-tab", "Previous tab", "Ctrl+Shift+Tab", "Switches to the tab on the left."),
+            A("new-window", "New window", "Ctrl+N", "Opens another browser window."),
+            A("private", "Private window", privateWindow, "Opens a private window, which forgets its history and sign-ins once closed."),
+            A("home", "Home page", "Alt+Home", "Goes to your home page.")),
+        T("pages", "Zoom & pages",
+            A("zoom-in", "Zoom in", "Ctrl+=", "Makes the page bigger, text and pictures alike."),
+            A("zoom-out", "Zoom out", "Ctrl+-", "Makes the page smaller, to fit more on the screen."),
+            A("zoom-reset", "Reset zoom", "Ctrl+0", "Puts the page back to its normal size."),
+            A("bookmark", "Bookmark this page", "Ctrl+D", "Saves the page as a bookmark, to find it again later."),
+            A("history", "History", "Ctrl+H", "Shows the pages you have visited."),
+            A("downloads", "Downloads", downloads, "Shows the files you have downloaded.")),
     };
 
     public static IReadOnlyList<ActionApp> All { get; } = new List<ActionApp>
     {
         App(EverywhereId, "Everywhere", Array.Empty<string>(),
-            A("vol-up", "Volume up", "VolumeUp"),
-            A("vol-down", "Volume down", "VolumeDown"),
-            A("mute", "Mute", "VolumeMute"),
-            A("play-pause", "Play / pause", "MediaPlayPause"),
-            A("next-track", "Next track", "MediaNext"),
-            A("prev-track", "Previous track", "MediaPrev"),
-            A("show-desktop", "Show desktop", "Win+D"),
-            A("last-window", "Last window", "Alt+Tab"),
-            A("task-view", "Task view", "Win+Tab"),
-            A("maximize", "Maximize window", "Win+Up"),
-            A("snap-left", "Snap left", "Win+Left"),
-            A("snap-right", "Snap right", "Win+Right"),
-            A("screenshot", "Save a screenshot", "Win+PrintScreen"),
-            A("enter", "Enter", "Enter"),
-            A("escape", "Escape", "Esc"),
-            A("close-window", "Close window", "Alt+F4", danger: true),
-            // The D-pad as arrow keys on the desktop: menus, lists, a video's seek. Bound but off
-            // the wheel, where four arrow spokes would say nothing.
-            A("arrow-up", "Arrow up", "Up", "Up", hidden: true),
-            A("arrow-down", "Arrow down", "Down", "Down", hidden: true),
-            A("arrow-left", "Arrow left", "Left", "Left", hidden: true),
-            A("arrow-right", "Arrow right", "Right", "Right", hidden: true),
-            A("copy", "Copy", "Ctrl+C", hidden: true),
-            A("paste", "Paste", "Ctrl+V", hidden: true),
-            A("undo", "Undo", "Ctrl+Z", hidden: true),
-            A("select-all", "Select all", "Ctrl+A", hidden: true)),
+            T("media", "Media",
+                A("vol-up", "Volume up", "VolumeUp", "Turns the PC's volume up a step."),
+                A("vol-down", "Volume down", "VolumeDown", "Turns the PC's volume down a step."),
+                A("mute", "Mute", "VolumeMute", "Mutes the PC's sound, or brings it back."),
+                A("play-pause", "Play / pause", "MediaPlayPause", "Plays or pauses whatever is playing: music, a video, a podcast."),
+                A("next-track", "Next track", "MediaNext", "Skips to the next track in whatever is playing."),
+                A("prev-track", "Previous track", "MediaPrev", "Goes back to the previous track, or the start of this one.")),
+            T("windows", "Windows",
+                A("show-desktop", "Show desktop", "Win+D", "Moves every window aside to show the desktop. Press it again to bring them back."),
+                A("last-window", "Last window", "Alt+Tab", "Switches to the window you were using before this one."),
+                A("task-view", "Task view", "Win+Tab", "Shows every open window side by side, to pick one."),
+                A("maximize", "Maximize window", "Win+Up", "Makes the window in front fill the screen."),
+                A("snap-left", "Snap left", "Win+Left", "Puts the window in front on the left half of the screen."),
+                A("snap-right", "Snap right", "Win+Right", "Puts the window in front on the right half of the screen."),
+                A("screenshot", "Save a screenshot", "Win+PrintScreen", "Saves a picture of the whole screen in Pictures › Screenshots."),
+                A("close-window", "Close window", "Alt+F4", "Closes the window in front, as its X would. It may ask to save first.", danger: true)),
+            T("keys", "Keys",
+                A("enter", "Enter", "Enter", "Presses Enter: confirms a question, or opens what is selected."),
+                A("escape", "Escape", "Esc", "Presses Escape: closes a menu or a question, or cancels."),
+                A("copy", "Copy", "Ctrl+C", "Copies what is selected, ready to paste somewhere."),
+                A("paste", "Paste", "Ctrl+V", "Puts in what was last copied or cut."),
+                A("undo", "Undo", "Ctrl+Z", "Takes back the last change."),
+                A("select-all", "Select all", "Ctrl+A", "Selects everything: all the text, or every file in a folder.")),
+            // The D-pad as arrow keys on the desktop: menus, lists, a video's seek. The buttons
+            // are the point; the spokes say that they are there, laid out the way they point.
+            T("arrows", "Arrows",
+                A("arrow-up", "Arrow up", "Up", "The Up arrow key: up a step in a list, a menu or a page.", "Up"),
+                A("arrow-right", "Arrow right", "Right", "The Right arrow key: the next item, or forward in a video.", "Right"),
+                A("arrow-down", "Arrow down", "Down", "The Down arrow key: down a step in a list, a menu or a page.", "Down"),
+                A("arrow-left", "Arrow left", "Left", "The Left arrow key: the item before, or back in a video.", "Left"))),
 
         App("firefox", "Firefox", new[] { "firefox" }, Browser("Ctrl+Shift+Y", "Ctrl+Shift+P")),
         App("chrome", "Google Chrome", new[] { "chrome" }, Browser("Ctrl+J", "Ctrl+Shift+N")),
@@ -279,111 +363,127 @@ public static class ActionPacks
         App("vivaldi", "Vivaldi", new[] { "vivaldi" }, Browser("Ctrl+J", "Ctrl+Shift+N")),
 
         App("vlc", "VLC", new[] { "vlc" },
-            A("play-pause", "Play / pause", "Space", "X"),
-            A("fullscreen", "Full screen", "F", "Y"),
-            A("mute", "Mute", "M"),
-            A("skip-fwd", "Skip forward 10 s", "Alt+Right"),
-            A("skip-back", "Skip back 10 s", "Alt+Left"),
-            A("next", "Next", "N"),
-            A("prev", "Previous", "P"),
-            A("subtitles", "Subtitle track", "V"),
-            A("audio", "Audio track", "B"),
-            A("faster", "Faster", "]"),
-            A("slower", "Slower", "["),
-            A("stop", "Stop", "S"),
-            A("playlist", "Playlist", "Ctrl+L"),
-            A("vol-up", "Volume up", "Ctrl+Up", hidden: true),
-            A("vol-down", "Volume down", "Ctrl+Down", hidden: true),
-            A("speed-normal", "Normal speed", "=", hidden: true),
-            A("open", "Open file", "Ctrl+O", hidden: true),
-            A("quit", "Quit VLC", "Ctrl+Q", hidden: true, danger: true)),
+            T("playback", "Playback",
+                A("play-pause", "Play / pause", "Space", "Plays or pauses the video.", "X"),
+                A("fullscreen", "Full screen", "F", "Fills the screen with the video, or goes back to the window.", "Y"),
+                A("mute", "Mute", "M", "Mutes VLC's sound, or brings it back."),
+                A("skip-fwd", "Skip forward 10 s", "Alt+Right", "Jumps ten seconds ahead."),
+                A("skip-back", "Skip back 10 s", "Alt+Left", "Jumps ten seconds back."),
+                A("next", "Next", "N", "Plays the next item in the playlist."),
+                A("prev", "Previous", "P", "Plays the item before in the playlist."),
+                A("stop", "Stop", "S", "Stops playing and goes back to the start.")),
+            T("tracks", "Tracks & speed",
+                A("subtitles", "Subtitle track", "V", "Switches to the next subtitles, or turns them off."),
+                A("audio", "Audio track", "B", "Switches to the next audio track, such as another language."),
+                A("faster", "Faster", "]", "Plays a little faster."),
+                A("slower", "Slower", "[", "Plays a little slower."),
+                A("speed-normal", "Normal speed", "=", "Back to normal speed."),
+                A("playlist", "Playlist", "Ctrl+L", "Shows or hides the playlist.")),
+            T("more", "More",
+                A("vol-up", "Volume up", "Ctrl+Up", "Turns VLC's own volume up."),
+                A("vol-down", "Volume down", "Ctrl+Down", "Turns VLC's own volume down."),
+                A("open", "Open file", "Ctrl+O", "Picks a file to play."),
+                A("quit", "Quit VLC", "Ctrl+Q", "Closes VLC.", danger: true))),
 
         App("spotify", "Spotify", new[] { "spotify" },
-            A("play-pause", "Play / pause", "Space", "X"),
-            A("next", "Next track", "Ctrl+Right", "Y"),
-            A("prev", "Previous track", "Ctrl+Left"),
-            A("vol-up", "Volume up", "Ctrl+Up"),
-            A("vol-down", "Volume down", "Ctrl+Down"),
-            A("mute", "Mute", "Ctrl+Shift+Down"),
-            A("shuffle", "Shuffle", "Ctrl+S"),
-            A("repeat", "Repeat", "Ctrl+R"),
-            A("search", "Search", "Ctrl+L"),
-            A("like", "Like this song", "Alt+Shift+B"),
-            A("home", "Home", "Alt+Shift+H", hidden: true),
-            A("back", "Back", "Alt+Left", hidden: true),
-            A("forward", "Forward", "Alt+Right", hidden: true)),
+            T("playback", "Playback",
+                A("play-pause", "Play / pause", "Space", "Plays or pauses the music.", "X"),
+                A("next", "Next track", "Ctrl+Right", "Skips to the next song.", "Y"),
+                A("prev", "Previous track", "Ctrl+Left", "Goes back to the song before."),
+                A("vol-up", "Volume up", "Ctrl+Up", "Turns Spotify's own volume up."),
+                A("vol-down", "Volume down", "Ctrl+Down", "Turns Spotify's own volume down."),
+                A("mute", "Mute", "Ctrl+Shift+Down", "Turns Spotify's volume all the way down."),
+                A("shuffle", "Shuffle", "Ctrl+S", "Turns shuffle on or off."),
+                A("repeat", "Repeat", "Ctrl+R", "Steps through repeat: off, the whole list, this song.")),
+            T("browse", "Browse",
+                A("search", "Search", "Ctrl+L", "Opens search, to find a song, an artist or a podcast."),
+                A("like", "Like this song", "Alt+Shift+B", "Saves the song playing to your Liked Songs."),
+                A("home", "Home", "Alt+Shift+H", "Goes to Spotify's home page."),
+                A("back", "Back", "Alt+Left", "Goes back to the page before."),
+                A("forward", "Forward", "Alt+Right", "Goes forward again, after going back."))),
 
         App("discord", "Discord", new[] { "discord" },
-            A("mute", "Mute microphone", "Ctrl+Shift+M", "X"),
-            A("deafen", "Deafen", "Ctrl+Shift+D", "Y"),
-            A("back", "Back", "Alt+Left"),
-            A("forward", "Forward", "Alt+Right"),
-            A("next-channel", "Next channel", "Alt+Down"),
-            A("prev-channel", "Previous channel", "Alt+Up"),
-            A("next-unread", "Next unread", "Alt+Shift+Down"),
-            A("prev-unread", "Previous unread", "Alt+Shift+Up"),
-            A("search", "Search", "Ctrl+K"),
-            A("mark-read", "Mark channel read", "Esc"),
-            A("upload", "Upload a file", "Ctrl+Shift+U", hidden: true),
-            A("emoji", "Emoji picker", "Ctrl+E", hidden: true),
-            A("pins", "Pinned messages", "Ctrl+P", hidden: true)),
+            T("voice", "Voice & channels",
+                A("mute", "Mute microphone", "Ctrl+Shift+M", "Mutes or unmutes your microphone in a voice call.", "X"),
+                A("deafen", "Deafen", "Ctrl+Shift+D", "Stops you hearing the call and mutes you too. Press it again to come back.", "Y"),
+                A("back", "Back", "Alt+Left", "Goes back to where you were before."),
+                A("forward", "Forward", "Alt+Right", "Goes forward again, after going back."),
+                A("next-channel", "Next channel", "Alt+Down", "Moves to the channel below in the server."),
+                A("prev-channel", "Previous channel", "Alt+Up", "Moves to the channel above in the server."),
+                A("next-unread", "Next unread", "Alt+Shift+Down", "Jumps to the next channel with unread messages."),
+                A("prev-unread", "Previous unread", "Alt+Shift+Up", "Jumps to the previous channel with unread messages.")),
+            T("more", "More",
+                A("search", "Search", "Ctrl+K", "Opens the quick switcher, to jump to any server, channel or friend."),
+                A("mark-read", "Mark channel read", "Esc", "Marks every message in this channel as read."),
+                A("upload", "Upload a file", "Ctrl+Shift+U", "Picks a file to send in this channel."),
+                A("emoji", "Emoji picker", "Ctrl+E", "Opens the emoji picker."),
+                A("pins", "Pinned messages", "Ctrl+P", "Shows this channel's pinned messages."))),
 
         App("explorer", "File Explorer", new[] { "explorer" },
-            A("back", "Back", "Alt+Left", "X"),
-            A("forward", "Forward", "Alt+Right"),
-            A("up", "Up a folder", "Alt+Up", "Y"),
-            A("open", "Open", "Enter"),
-            A("new-folder", "New folder", "Ctrl+Shift+N"),
-            A("rename", "Rename", "F2"),
-            A("delete", "Delete", "Delete"),
-            A("copy", "Copy", "Ctrl+C"),
-            A("paste", "Paste", "Ctrl+V"),
-            A("select-all", "Select all", "Ctrl+A"),
-            A("address", "Address bar", "Alt+D"),
-            A("search", "Search", "Ctrl+E"),
-            A("refresh", "Refresh", "F5"),
-            A("cut", "Cut", "Ctrl+X", hidden: true),
-            A("new-window", "New window", "Ctrl+N", hidden: true),
-            A("properties", "Properties", "Alt+Enter", hidden: true),
-            A("close", "Close window", "Ctrl+W", hidden: true, danger: true)),
+            T("navigate", "Navigate",
+                A("back", "Back", "Alt+Left", "Goes back to the folder you were in before.", "X"),
+                A("forward", "Forward", "Alt+Right", "Goes forward again, after going back."),
+                A("up", "Up a folder", "Alt+Up", "Goes up to the folder this one is in.", "Y"),
+                A("open", "Open", "Enter", "Opens the file or folder that is selected."),
+                A("address", "Address bar", "Alt+D", "Selects the address bar, to type where to go."),
+                A("search", "Search", "Ctrl+E", "Searches this folder and every folder in it."),
+                A("refresh", "Refresh", "F5", "Updates the list of files.")),
+            T("files", "Files",
+                A("new-folder", "New folder", "Ctrl+Shift+N", "Makes a new folder here."),
+                A("rename", "Rename", "F2", "Renames the file or folder that is selected."),
+                A("delete", "Delete", "Delete", "Moves what is selected to the Recycle Bin."),
+                A("cut", "Cut", "Ctrl+X", "Takes what is selected, to paste it somewhere else."),
+                A("copy", "Copy", "Ctrl+C", "Copies what is selected, to paste somewhere else."),
+                A("paste", "Paste", "Ctrl+V", "Puts what was cut or copied into this folder."),
+                A("select-all", "Select all", "Ctrl+A", "Selects every file and folder here."),
+                A("properties", "Properties", "Alt+Enter", "Shows the size, dates and other details of what is selected.")),
+            T("window", "Window",
+                A("new-window", "New window", "Ctrl+N", "Opens another File Explorer window."),
+                A("close", "Close window", "Ctrl+W", "Closes this File Explorer window.", danger: true))),
 
         App("retroarch", "RetroArch", new[] { "retroarch" },
-            A("menu", "Menu", "F1", "Y"),
-            A("save-state", "Save state", "F2", "X"),
-            A("load-state", "Load state", "F4"),
-            A("slot-next", "Next state slot", "F7"),
-            A("slot-prev", "Previous state slot", "F6"),
-            A("screenshot", "Screenshot", "F8"),
-            A("fast-forward", "Fast forward", "Space"),
-            A("rewind", "Rewind", "R"),
-            A("pause", "Pause", "P"),
-            A("fullscreen", "Full screen", "F"),
-            A("mute", "Mute", "F9"),
-            A("reset", "Reset game", "H", hidden: true, danger: true),
-            A("quit", "Quit RetroArch", "Esc", hidden: true, danger: true)),
+            T("play", "Play",
+                A("menu", "Menu", "F1", "Opens RetroArch's quick menu over the game.", "Y"),
+                A("save-state", "Save state", "F2", "Saves the game exactly where you are, in the current slot.", "X"),
+                A("load-state", "Load state", "F4", "Goes back to the moment saved in the current slot."),
+                A("slot-next", "Next state slot", "F7", "Moves on to the next save slot."),
+                A("slot-prev", "Previous state slot", "F6", "Moves back to the save slot before."),
+                A("fast-forward", "Fast forward", "Space", "Runs the game fast. Press it again for normal speed."),
+                A("rewind", "Rewind", "R", "Winds the game back a moment, when rewind is on in RetroArch's settings."),
+                A("pause", "Pause", "P", "Pauses the game, or carries on.")),
+            T("more", "More",
+                A("screenshot", "Screenshot", "F8", "Saves a picture of the game."),
+                A("fullscreen", "Full screen", "F", "Switches between full screen and a window."),
+                A("mute", "Mute", "F9", "Mutes the game's sound, or brings it back."),
+                A("reset", "Reset game", "H", "Restarts the game from the beginning. Anything unsaved is lost.", danger: true),
+                A("quit", "Quit RetroArch", "Esc", "Closes RetroArch. It may want the press twice.", danger: true))),
 
         App("pcsx2", "PCSX2", new[] { "pcsx2-qt", "pcsx2-qtx64", "pcsx2-qtx64-avx2", "pcsx2" },
-            A("save-state", "Save state", "F1", "X"),
-            A("load-state", "Load state", "F3", "Y"),
-            A("slot-next", "Next state slot", "F2"),
-            A("slot-prev", "Previous state slot", "Shift+F2"),
-            A("pause", "Pause menu", "Esc"),
-            A("screenshot", "Screenshot", "F8"),
-            A("fullscreen", "Full screen", "Alt+Enter"),
-            A("frame-limit", "Frame limiter", "F4"),
-            A("turbo", "Turbo", "Tab")),
+            T("play", "Play",
+                A("save-state", "Save state", "F1", "Saves the game exactly where you are, in the current slot.", "X"),
+                A("load-state", "Load state", "F3", "Goes back to the moment saved in the current slot.", "Y"),
+                A("slot-next", "Next state slot", "F2", "Moves on to the next save slot."),
+                A("slot-prev", "Previous state slot", "Shift+F2", "Moves back to the save slot before."),
+                A("pause", "Pause menu", "Esc", "Pauses the game and opens PCSX2's menu."),
+                A("turbo", "Turbo", "Tab", "Runs the game fast. Press it again for normal speed.")),
+            T("view", "View",
+                A("screenshot", "Screenshot", "F8", "Saves a picture of the game."),
+                A("fullscreen", "Full screen", "Alt+Enter", "Switches between full screen and a window."),
+                A("frame-limit", "Frame limiter", "F4", "Turns the speed limit off and on. Off runs the game as fast as the PC can."))),
 
         App("dolphin", "Dolphin", new[] { "dolphin" },
-            A("play-pause", "Play / pause", "F10", "X"),
-            A("save-1", "Save state 1", "Shift+F1", "Y"),
-            A("load-1", "Load state 1", "F1"),
-            A("save-2", "Save state 2", "Shift+F2"),
-            A("load-2", "Load state 2", "F2"),
-            A("save-3", "Save state 3", "Shift+F3"),
-            A("load-3", "Load state 3", "F3"),
-            A("screenshot", "Screenshot", "F9"),
-            A("fullscreen", "Full screen", "Alt+Enter"),
-            A("stop", "Stop", "Esc", danger: true)),
+            T("states", "States",
+                A("play-pause", "Play / pause", "F10", "Pauses the game, or carries on.", "X"),
+                A("save-1", "Save state 1", "Shift+F1", "Saves the game exactly where you are, in slot 1.", "Y"),
+                A("load-1", "Load state 1", "F1", "Goes back to the moment saved in slot 1."),
+                A("save-2", "Save state 2", "Shift+F2", "Saves the game exactly where you are, in slot 2."),
+                A("load-2", "Load state 2", "F2", "Goes back to the moment saved in slot 2."),
+                A("save-3", "Save state 3", "Shift+F3", "Saves the game exactly where you are, in slot 3."),
+                A("load-3", "Load state 3", "F3", "Goes back to the moment saved in slot 3.")),
+            T("more", "More",
+                A("screenshot", "Screenshot", "F9", "Saves a picture of the game."),
+                A("fullscreen", "Full screen", "Alt+Enter", "Switches between full screen and a window."),
+                A("stop", "Stop", "Esc", "Stops the game and goes back to Dolphin's list. Anything unsaved is lost.", danger: true))),
     };
 
     public static ActionApp? Find(string id) => All.FirstOrDefault(a => a.Id == id);

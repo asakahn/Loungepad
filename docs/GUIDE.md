@@ -75,8 +75,8 @@ a menu remote:
   grow and shrink — from Settings, or from the gear on the keyboard itself. The Windows touch
   keyboard is there too.
 - **The Power Wheel runs Windows.** One tap of the Xbox button, from anywhere — including
-  mid-game; hold it instead to bring Loungepad back — and you can switch to any open window (it gets dragged onto the TV with you), fire
-  a saved shortcut, summon the keyboard, re-centre a lost pointer, close the window in front of
+  mid-game; hold it instead to bring Loungepad back — and you can switch to any open window (it gets dragged onto the TV with you), open
+  one of your shortcuts, summon the keyboard, re-centre a lost pointer, close the window in front of
   you, rest (the TV dark and the game paused until you press a button again) or put the PC to
   sleep.
 - **It rests like a console.** Put the pad down and after an hour with nothing pressed (Settings →
@@ -94,10 +94,29 @@ a menu remote:
 - **Actions put an app's shortcuts on the pad.** The wheel's first spoke opens a second wheel
   with the shortcuts of whatever was in front: new tab, close tab, back, reload and full screen
   in a browser; play, pause and subtitles in VLC; save and load state in RetroArch; volume, media
-  keys and Alt+Tab everywhere. Point at one and press A, or give an action a button of its own —
-  **Y** for a new tab, say — and it works in that app whenever Loungepad is out of the way,
-  without the wheel. Settings → Actions is where the packs live, where any shortcut, name or
-  button can be changed, and where a program we have no pack for gets one of its own.
+  keys and Alt+Tab everywhere. They sit on tabs of up to eight, the app's own first and
+  Everywhere's after (each tab carries its app's icon), and LB / RB turn between them. The
+  wheel's centre says in a sentence what the highlighted action does. Point at one and press A,
+  or give an action a button of its own — **Y** for a new tab, say — and it works in that app
+  whenever Loungepad is out of the way, without the wheel. Settings → Actions is a grid of the
+  apps; **A** on one opens its wheel in the same editor as Settings → Shortcuts: **A** on a spoke
+  edits the action (name, description, keyboard shortcut, button, another tab, take it off),
+  **A** on the dashed + adds one (or puts
+  back one of the app's own that was taken off), **Y** moves one round the ring or to another
+  tab, **X** is the tab's options and the app's own (restore its defaults, rename or remove an app
+  you added), **B** goes back to the grid. A program we have no pack for gets one of its own.
+- **Shortcuts are wheels of your own.** The Power Wheel's Shortcuts spoke opens a wheel of things
+  to open: an app from the Start menu (Store apps included), a game from your library, a folder, a
+  file, a website, a command or script, one of Windows' own windows (Explorer, the Settings pages,
+  the Volume Mixer), or a power action (lock, rest, sleep, sign out, restart, shut down; the last
+  three always ask first). Each tab is a wheel of up to eight, and LB / RB turn between them.
+  Settings → Shortcuts is the wheel itself, laid out the way the Power Wheel draws it: **A** on a
+  spoke edits it (name, what it opens, icon, a button that opens it from the desktop, another tab,
+  remove), **A** on the dashed + adds one, **Y** picks one up to slide it round the ring or carry
+  it to another tab with LB / RB, and **X** is the tab's options (rename, new tab, move it, delete
+  it, restore the defaults). With a mouse, drag a spoke where you want it, or onto another tab.
+  A website shows the site's own icon, and any shortcut can wear a picture or an icon of your own
+  instead (Icon → Choose an icon…).
 - **The pointer knows when to disappear.** Touch the D-pad and the cursor hides and stops
   stealing focus; nudge the stick or a real mouse and it comes straight back. Optionally
   system-wide, so it stays hidden out on the desktop too.

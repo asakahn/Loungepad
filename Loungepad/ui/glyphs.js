@@ -87,6 +87,14 @@ const ICONS = {
   apps: '<rect x="3.2" y="3.2" width="7.2" height="7.2" rx="1.6"/><rect x="13.6" y="3.2" width="7.2" height="7.2" rx="1.6"/>'
       + '<rect x="3.2" y="13.6" width="7.2" height="7.2" rx="1.6"/><rect x="13.6" y="13.6" width="7.2" height="7.2" rx="1.6"/>',
   power: '<path d="M12 3.2v8.4"/><path d="M7.3 6.4a7.6 7.6 0 1 0 9.4 0"/>',
+  /* The Shortcuts' power actions, each its own shape so a wheel of them reads at a glance: Sleep
+     is Rest's moon with a z, Restart a circle coming round on itself, Sign out a door with the
+     way out of it. */
+  sleep: '<path d="M18.4 15.6A7.8 7.8 0 0 1 8.4 5.6a7.8 7.8 0 1 0 10 10z"/><path d="M14.6 3.6h4.6l-4.6 5h4.6"/>',
+  restart: '<path d="M4.4 12a7.6 7.6 0 1 0 2.2-5.4"/><path d="M4 3.6v4.8h4.8"/>',
+  signOut: '<path d="M10 4H6a1.5 1.5 0 0 0-1.5 1.5v13A1.5 1.5 0 0 0 6 20h4"/><path d="M14.5 8 19 12l-4.5 4M19 12H9.5"/>',
+  arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   /* The action wheel: a bolt for "do it", a globe for the actions that work everywhere, a plus
      for adding an app or an action. */
   bolt: '<path d="M13.2 2.6 4.8 13.4h6.4l-1.4 8 8.4-10.8h-6.4z"/>',

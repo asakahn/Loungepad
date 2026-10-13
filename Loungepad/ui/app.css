@@ -1194,8 +1194,10 @@ body.pad-mode, body.pad-mode * { cursor: none !important; }
 }
 .radial-item .ov-icon { width: 34px; height: 34px; }
 .radial-item.focused .ov-icon { color: var(--accent); }
-/* Centred and a little tighter on two lines: "Disable joystick mouse" is wider than a spoke. */
-.radial-item span {
+/* Centred and a little tighter on two lines: "Disable joystick mouse" is wider than a spoke.
+   The spoke's own lines only: as `.radial-item span` it also padded every button picture and every
+   "+" inside a chord by 12px a side, which spread a bound chord to four times a spoke's width. */
+.radial-item > span {
   font-size: 19px; font-weight: 500; color: color-mix(in srgb, var(--ink) 82%, transparent);
   text-align: center; line-height: 1.15; padding: 0 12px;
 }
@@ -1488,8 +1490,18 @@ body.overlay-mode #overlay-actions { background: color-mix(in srgb, var(--bg) 74
 .spoke-keys .btn-icon { height: 24px; }
 .spoke-keys .combo-plus { margin: 0 4px; font-size: 14px; }
 .spoke-keys .keys-none { font-size: 14px; }
-.spoke-btn { position: absolute; top: -13px; right: -10px; }
-.spoke-btn .btn-icon { height: 30px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.55)); }
+/* The bound button: a row along the bottom of the spoke, inside the box (spokeBtnHtml). Its
+   pictures are --btn-h tall, smaller the longer the chord, and the row is never wider than the
+   spoke: a slot can shrink, and the picture keeps its shape inside it. */
+.radial-item > .spoke-btn {
+  display: flex; align-items: center; justify-content: center;
+  max-width: 100%; min-width: 0; padding: 0 4px; line-height: 0; overflow: hidden;
+}
+.spoke-btn .combo { gap: 3px; max-width: 100%; min-width: 0; }
+.spoke-btn .btn-slot { flex: 0 1 auto; min-width: 0; }
+.spoke-btn .btn-icon { height: var(--btn-h, 24px); max-width: 100%; }
+.spoke-btn .combo-plus { margin: 0; font-size: calc(var(--btn-h, 24px) * 0.55); line-height: 1; }
+.action-spoke:has(.spoke-btn), .sc-spoke.has-btn { gap: 5px; }
 .action-spoke.no-keys { opacity: 0.55; }
 /* The centre: which app's page this is, the highlighted action, its keys and button, the window. */
 .actions-app {
@@ -1509,21 +1521,217 @@ body.overlay-mode #overlay-actions { background: color-mix(in srgb, var(--bg) 74
 }
 .actions-btn .btn-icon { height: 36px; }
 .actions-hint { font-size: 18px; color: color-mix(in srgb, var(--ink) 55%, transparent); }
-/* The pager: LB, one dot per page, RB, in a row of its own under the ring. The bottom spoke ends
+/* The pager: LB, the tabs by name, RB, in a row of its own under the ring. The bottom spoke ends
    at 806px of the 880px wrap (812 when it is lifted and ringed), so the row starts at 828 and the
-   legend is moved below the wrap to make the room. A square dot is an Everywhere page, so the eye
-   knows where the app's own end. */
+   legend is moved below the wrap to make the room. A globe stands before Everywhere's tabs, so the
+   eye knows where the app's own end; a row too long for the pager keeps the tab in force in view. */
 .actions-pager {
   position: absolute; top: 828px; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 16px;
 }
 .actions-pager[hidden] { display: none; }
 .actions-pager .btn-icon { height: 30px; }
-.actions-pages { display: flex; align-items: center; gap: 9px; }
-.actions-pages i { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--ink) 22%, transparent); }
-.actions-pages i.ev { border-radius: 2px; }
-.actions-pages i.on { background: var(--accent); }
+/* Wider than the Shortcuts wheel's: two apps' tabs, each with its picture, share the row. */
+.sc-pages.actions-pages { scroll-behavior: auto; max-width: 1040px; }
+.actions-desc > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Each tab led by its app's picture, so a page of Everywhere's never reads as the app's own. */
+.actions-pages .sc-page { display: inline-flex; align-items: center; gap: 8px; padding-left: 10px; }
+.actions-pages .sc-page .ov-icon { width: 17px; height: 17px; flex: 0 0 auto; color: color-mix(in srgb, var(--ink) 60%, transparent); }
+.actions-pages .sc-page.on .ov-icon { color: var(--accent); }
+.page-icon { width: 18px; height: 18px; flex: 0 0 auto; background-size: contain; background-position: center; background-repeat: no-repeat; }
+.actions-pages .sc-page:not(.on) .page-icon { opacity: 0.75; }
+.app-mono-sm {
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 5px;
+  font-size: 11px; font-weight: 700; font-style: normal; line-height: 1; color: color-mix(in srgb, var(--ink) 80%, transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.actions-app .app-mono-sm { font-size: 13px; border-radius: 6px; }
+/* Where the app's own tabs end and Everywhere's begin. */
+.actions-pages-div { flex: 0 0 auto; align-self: center; width: 1px; height: 24px; margin: 0 10px; background: color-mix(in srgb, var(--ink) 24%, transparent); }
 .overlay.active .actions-pager { animation: fadeIn var(--t-menu) linear backwards; animation-delay: calc(80ms * var(--motion)); }
+
+/* ---- the shortcut wheel ----
+   The Power Wheel's Shortcuts (shortcuts.js): the same spokes, each with a picture -- a glyph, a
+   program's own icon, a game's art, a website's letter -- and its name. The pager names the tabs. */
+#overlay-shortcuts { background: color-mix(in srgb, var(--bg) 90%, transparent); }
+body.overlay-mode #overlay-shortcuts { background: color-mix(in srgb, var(--bg) 74%, transparent); }
+.sc-spoke { gap: 8px; padding: 0 12px; }
+.sc-glyph { display: flex; align-items: center; justify-content: center; height: 40px; }
+.sc-glyph .ov-icon { width: 34px; height: 34px; }
+.sc-img { display: block; width: 40px; height: 40px; background-size: contain; background-position: center; background-repeat: no-repeat; }
+.sc-art { display: block; width: 66px; height: 38px; border-radius: 7px; background-size: cover; background-position: center; }
+.sc-mono {
+  display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px;
+  font-style: normal; font-size: 21px; font-weight: 700; color: color-mix(in srgb, var(--ink) 75%, transparent);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+.radial-item.focused .sc-mono { color: var(--accent); }
+.sc-spoke.danger .spoke-name { color: var(--danger); }
+.sc-spoke.missing .sc-glyph, .sc-spoke.missing .spoke-name { opacity: 0.45; }
+/* The centre's line under the description is 20px tall; the button drawn there fits it. */
+.sc-target-btn { display: inline-flex; vertical-align: middle; }
+.sc-target-btn .btn-icon { height: 20px; }
+.sc-target-btn .combo-plus { margin: 0 4px; font-size: 13px; }
+.sc-pages { display: flex; align-items: center; gap: 6px; max-width: 640px; overflow: hidden; }
+.sc-page {
+  padding: 5px 14px; border-radius: 999px; cursor: pointer; white-space: nowrap; flex: 0 0 auto;
+  font-size: 16px; font-weight: 500; color: color-mix(in srgb, var(--ink) 50%, transparent);
+  transition: background var(--t-focus) linear, color var(--t-focus) linear;
+}
+.sc-page.on { color: var(--ink); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.sc-pages.more-left { -webkit-mask-image: linear-gradient(90deg, transparent, #000 36px); mask-image: linear-gradient(90deg, transparent, #000 36px); }
+.sc-pages.more-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); }
+.sc-pages.more-left.more-right {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+}
+
+/* ---- Settings → Shortcuts: the wheel as its own editor ----
+   The tabs across the top, the ring drawn as the Power Wheel draws it (smaller, the same spokes),
+   and the highlighted shortcut's details beside it. Spokes slide to their new place when one is
+   moved, which is the whole of the feedback a move needs. */
+.settings-scroll.sc-mode { overflow: hidden; gap: 0; }
+.sc-editor { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; }
+.sc-tabs { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; padding: 4px 2px; }
+.sc-tabs-btn { display: flex; cursor: pointer; opacity: 0.8; }
+.sc-tabs-btn[hidden] { display: none; }
+.sc-tabs-btn .btn-icon { height: 30px; }
+.sc-tab-list { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.sc-tab {
+  display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 999px; cursor: pointer;
+  font-size: 19px; font-weight: 500; color: color-mix(in srgb, var(--ink) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  transition: background var(--t-focus) linear, color var(--t-focus) linear, border-color var(--t-focus) linear;
+}
+.sc-tab:hover { color: var(--ink); }
+.sc-tab.active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.sc-tab.drop { border-style: dashed; border-color: var(--accent); color: var(--ink); }
+.sc-tab-count { font-family: "IBM Plex Mono", monospace; font-size: 14px; color: color-mix(in srgb, var(--ink) 34%, transparent); }
+.sc-tab.active .sc-tab-count { color: color-mix(in srgb, var(--accent) 80%, transparent); }
+.sc-tab-more { margin-left: 2px; padding: 0 4px; font-size: 20px; line-height: 1; color: color-mix(in srgb, var(--ink) 55%, transparent); }
+.sc-tab-more:hover { color: var(--accent); }
+.sc-tab-add { border-style: dashed; }
+/* The pointer resting on a control of the strip makes it the highlight (A presses it), so it is
+   ringed like any other highlight. The ⋯ only changes colour: it sits inside its tab. */
+.sc-tab.focused, .sc-tabs-btn.focused {
+  color: var(--ink); opacity: 1;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 30px 4px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.sc-tabs-btn { border-radius: 999px; }
+.sc-tab-more.focused { color: var(--accent); }
+.sc-tab-add .ov-icon { width: 18px; height: 18px; }
+.sc-body { flex: 1; min-height: 0; display: flex; align-items: center; gap: 44px; }
+.sc-wheel { position: relative; flex: 0 0 600px; width: 600px; height: 600px; }
+.sc-ring { position: absolute; inset: 0; }
+.sc-wheel .radial-item.sc-spoke {
+  width: 140px; height: 86px; margin: -43px 0 0 -70px; gap: 5px; padding: 0 8px; cursor: pointer;
+  transition: transform var(--t-focus) var(--ease), background var(--t-focus) linear, box-shadow var(--t-focus) linear,
+              left var(--t-menu) var(--ease), top var(--t-menu) var(--ease);
+}
+.sc-wheel .sc-glyph { height: 32px; flex: 0 0 auto; }
+.sc-wheel .sc-glyph .ov-icon { width: 28px; height: 28px; }
+.sc-wheel .sc-img { width: 32px; height: 32px; }
+.sc-wheel .sc-art { width: 52px; height: 30px; }
+.sc-wheel .sc-mono { width: 32px; height: 32px; font-size: 17px; border-radius: 10px; }
+/* The editor's spokes are smaller: so is a bound button, and with one there is a third line to
+   fit, so the name keeps to one line and the picture gives up a little. */
+.sc-wheel .spoke-btn .btn-icon { height: calc(var(--btn-h, 24px) * 0.78); }
+.sc-wheel .radial-item.sc-spoke.has-btn { gap: 4px; }
+.sc-wheel .radial-item.sc-spoke.has-btn span.spoke-name { -webkit-line-clamp: 1; }
+.sc-wheel .sc-spoke.has-btn .sc-glyph { height: 26px; }
+.sc-wheel .sc-spoke.has-btn .sc-glyph .ov-icon { width: 24px; height: 24px; }
+.sc-wheel .sc-spoke.has-btn .sc-img, .sc-wheel .sc-spoke.has-btn .sc-mono { width: 26px; height: 26px; font-size: 14px; }
+.sc-wheel .sc-spoke.has-btn .sc-art { width: 44px; height: 25px; }
+/* Two lines rather than an ellipsis: the spokes are narrower here than on the Power Wheel. */
+.sc-wheel .radial-item.sc-spoke span.spoke-name {
+  font-size: 15px; line-height: 1.15; padding: 0; white-space: normal;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.sc-spoke.add { background: transparent; border: 1.5px dashed color-mix(in srgb, var(--ink) 28%, transparent); }
+.sc-spoke.add .ov-icon, .sc-spoke.add .spoke-name { color: color-mix(in srgb, var(--ink) 55%, transparent); }
+.sc-spoke.add.focused { background: var(--surface); border-style: solid; }
+.sc-spoke.add.focused .ov-icon, .sc-spoke.add.focused .spoke-name { color: var(--accent); }
+/* Picked up: lifted off the ring, with the way it can go drawn either side. */
+.radial-item.sc-spoke.moving {
+  z-index: 3; transform: scale(1.12); background: var(--surface);
+  box-shadow: 0 0 0 3px var(--accent), 0 22px 50px -12px rgba(0, 0, 0, 0.7);
+}
+.sc-spoke.moving::before, .sc-spoke.moving::after {
+  position: absolute; top: 50%; transform: translateY(-50%); font-size: 22px; color: var(--accent);
+}
+.sc-spoke.moving::before { content: "‹"; left: -20px; }
+.sc-spoke.moving::after { content: "›"; right: -20px; }
+.sc-hub {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 220px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; pointer-events: none;
+}
+.sc-hub-tab { font-size: 15px; letter-spacing: 0.18em; color: color-mix(in srgb, var(--ink) 50%, transparent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-hub-count { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; color: color-mix(in srgb, var(--ink) 80%, transparent); }
+.sc-card {
+  flex: 1; min-width: 0; align-self: center; padding: 32px 34px; border-radius: 20px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--card)), var(--card) 60%);
+  border: 1px solid color-mix(in srgb, var(--edge) 8%, transparent);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.sc-card-icon { display: flex; align-items: center; height: 64px; margin-bottom: 4px; }
+.sc-card-icon .ov-icon { width: 48px; height: 48px; color: var(--accent); }
+.sc-card-icon .sc-img { width: 60px; height: 60px; }
+.sc-card-icon .sc-art { width: 112px; height: 64px; border-radius: 10px; }
+.sc-card-icon .sc-mono { width: 60px; height: 60px; font-size: 30px; border-radius: 16px; }
+.sc-card-icon.add .ov-icon { color: color-mix(in srgb, var(--ink) 55%, transparent); }
+.sc-card-kind { font-size: 14px; letter-spacing: 0.16em; color: color-mix(in srgb, var(--ink) 45%, transparent); }
+.sc-card-name { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.sc-card-what { font-size: 18px; line-height: 1.4; color: color-mix(in srgb, var(--ink) 62%, transparent); overflow-wrap: anywhere; }
+.sc-card-what .btn-icon { height: 26px; vertical-align: middle; }
+.sc-card-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 10px; padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 10%, transparent); font-size: 18px; color: color-mix(in srgb, var(--ink) 62%, transparent);
+}
+.sc-card-row .btn-icon { height: 30px; }
+.sc-card-note { font-size: 16px; color: color-mix(in srgb, var(--ink) 48%, transparent); }
+.sc-card-warn { font-size: 16px; line-height: 1.4; color: var(--danger); }
+.sc-card-warn .btn-icon { height: 24px; vertical-align: middle; }
+/* The edit sheet's Icon row: the picture itself beside its word. */
+.sc-icon-val { display: inline-flex; align-items: center; margin-right: 12px; }
+.sc-icon-val .ov-icon { width: 26px; height: 26px; }
+.sc-icon-val .sc-img, .sc-icon-val .sc-mono { width: 30px; height: 30px; font-size: 16px; border-radius: 9px; }
+.sc-icon-val .sc-art { width: 48px; height: 27px; }
+/* ---- Settings → Actions: an app's wheel ----
+   The same editor (wheeledit.js), its spokes an action's name over its keys, and the bound button
+   under those when there is one; the name gives up its second line to make the room. */
+.sc-wheel .radial-item.ac-spoke { gap: 6px; }
+.sc-wheel .ac-spoke .spoke-keys { display: flex; justify-content: center; max-width: 100%; min-width: 0; overflow: hidden; line-height: 0; }
+.sc-wheel .ac-spoke .spoke-keys .keys { max-width: 100%; }
+.sc-wheel .ac-spoke .spoke-keys .btn-icon { height: 21px; flex: 0 1 auto; min-width: 0; }
+.sc-wheel .ac-spoke .spoke-keys .combo-plus { margin: 0 2px; font-size: 12px; line-height: 1; }
+.sc-wheel .ac-spoke .spoke-keys .keys-none { font-size: 13px; line-height: 1.2; }
+.sc-wheel .radial-item.ac-spoke.has-btn { gap: 3px; }
+.sc-wheel .ac-spoke.has-btn .spoke-keys .btn-icon { height: 18px; }
+.sc-wheel .ac-spoke.danger .spoke-name { color: var(--danger); }
+.sc-wheel .ac-spoke.no-keys:not(.focused) .spoke-name, .sc-wheel .ac-spoke.no-keys .spoke-keys { opacity: 0.55; }
+/* Which app's wheel it is, first in the tab strip, before the tabs and their shoulders. */
+.ac-head {
+  display: flex; align-items: center; gap: 10px; flex: 0 0 auto; padding-right: 16px; margin-right: 2px;
+  border-right: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 20px; font-weight: 600; color: var(--ink); white-space: nowrap;
+}
+.ac-head .ov-icon { width: 24px; height: 24px; color: var(--accent); }
+.ac-head .app-icon-sm { width: 28px; height: 28px; }
+.ac-head-mono {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px;
+  font-size: 15px; font-weight: 700; background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+/* The card leads with the keys themselves, as the action wheel's centre does. */
+.sc-card-icon.ac-card-keys .btn-icon { height: 40px; }
+.sc-card-icon.ac-card-keys .keys-none { font-size: 20px; }
+
+/* A small picture in a menu row (renderMenu's `img`): an app's icon, or a game's art when wide. */
+.ov-img {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+  background-size: contain; background-position: center; background-repeat: no-repeat;
+}
+.ov-img.wide { width: 56px; height: 32px; border-radius: 6px; background-size: cover; background-color: color-mix(in srgb, var(--ink) 8%, transparent); }
+.ov-img .ov-icon { width: 24px; height: 24px; }
 
 /* ---- Settings → Actions: the app grid ----
    The settings scroller laid out as tiles while the category is on its first level. */

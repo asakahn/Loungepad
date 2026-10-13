@@ -190,6 +190,7 @@ function repaintFocus() {
   // comes first for the same reason it does there -- it sits on top of everything else, and
   // repainting the library underneath it would leave the visible menu unhighlighted.
   if (actionWheelOpen) renderActionWheel();
+  else if (shortcutWheelOpen) renderShortcutWheel();
   else if (keyPick) renderKeyPick();
   else if (captureState) renderCapture();
   else if (radialSub) renderRadialSub();
@@ -1406,7 +1407,7 @@ const LIBRARY_KEYCAPS = { Menu: "Tab", LB: "`", Y: "Ctrl" };
 
 function libraryTakesKeys() {
   return view === "library" && !overlayOpen() && !searchOpen && !overlayMode
-    && !radialOpen && !radialSub && !actionWheelOpen && !ingameOpen;
+    && !radialOpen && !radialSub && !actionWheelOpen && !shortcutWheelOpen && !ingameOpen;
 }
 
 /* B only appears while a search is standing, because that is when it does something worth saying:
@@ -1472,9 +1473,12 @@ function renderMenu(listEl, footEl, items, idx, footHtml, onHover, onClick) {
     else if (r.checked !== undefined) right = `<span class="ov-check${r.checked ? "" : " off"}">${r.checked ? (r.star ? "★" : r.radio ? "●" : "✓") : "○"}</span>`;
     // A picture of the window replaces the icon rather than joining it: the icon was standing in
     // for exactly this, and showing both says the same thing twice.
+    // `img` is a small picture in the icon's place (an app's icon, a game's art), for lists too
+    // long to give every row a window-sized thumbnail; the icon stands in until it has loaded.
     const lead = r.thumb
       ? `<div class="ov-thumb${r.thumbIsIcon ? " is-icon" : ""}" style="background-image:url('${r.thumb}')"></div>`
       : r.swatch ? `<span class="swatch ov-swatch" style="background:${esc(r.swatch)}"></span>`
+      : r.img !== undefined ? `<span class="ov-img${r.imgWide ? " wide" : ""}"${r.img ? ` style="background-image:url('${String(r.img).replace(/["'()\\\s]/g, c => encodeURIComponent(c))}')"` : ""}>${r.img ? "" : iconSvg(r.icon)}</span>`
       : iconSvg(r.icon);
     // `html` is a label the caller built itself -- button pictures for a combo -- and is trusted;
     // everything else is text.
@@ -1541,7 +1545,10 @@ let guideOpen = false;
 /* The action wheel and its two pickers (actions.js). Declared here because this file reads them
    while it boots, before actions.js has run. */
 let actionWheelOpen = false;
-let captureState = null;                 // { app, action, onDone, timer, note }
+let shortcutWheelOpen = false;           // the Power Wheel's Shortcuts wheel (shortcuts.js)
+let scUi = { tab: 0, moving: null, pending: null, drag: null, droppedAt: 0 };   // Settings → Shortcuts' editor
+let acUi = { tab: 0, moving: null, pending: null, drag: null, droppedAt: 0 };   // an app's wheel under Settings → Actions
+let captureState = null;                 // { app, action, onDone, check, timer, note }
 let keyPick = null;                      // { onDone, mods: Set }
 let overlayTargetProcess = "";           // the exe behind the window a menu opened over; "" for none
 let overlayTargetIsGame = false;         // that window is the running game's (the wheel's Close spoke)
@@ -4787,6 +4794,7 @@ const SETTINGS_TABS = [
   { id: "input",      label: "Controller" },
   { id: "keyboard",   label: "Keyboard" },
   { id: "actions",    label: "Actions" },
+  { id: "shortcuts",  label: "Shortcuts" },
   { id: "addons",     label: "Add-ons" },
   { id: "library",    label: "Library" },
   { id: "stats",      label: "Stats" },
@@ -4799,9 +4807,11 @@ let settingsTab = "general";
 let settingsPane = "nav";
 
 function settingsRows() {
-  // Actions is not a list of settings but a grid of apps that drills into lists; actions.js
-  // builds whatever level is showing, in the same row shape.
+  // Actions is not a list of settings but a grid of apps, each opening its wheel; actions.js
+  // builds whatever level is showing, in the same row shape (one row per spoke on a wheel).
   if (settingsTab === "actions") return actionsSettingsRows();
+  // Shortcuts is a wheel to arrange (wheeledit.js over shortcuts.js); one row per spoke for the counting.
+  if (settingsTab === "shortcuts") return shortcutsSettingsRows();
   // Add-ons likewise: a grid of themes or extensions that drills into one add-on's page (addons.js).
   if (settingsTab === "addons") return addonsSettingsRows();
   let cat = null;
@@ -4814,9 +4824,10 @@ function settingsRows() {
 function setSettingsTab(id) {
   const changed = settingsTab !== id;
   if (changed) { settingsTab = id; settingsIdx = 0; }
-  // Always the grid on the way in, never a list left open from last time.
-  if (changed && id === "actions") actionsTabReset();
+  // The first tab of a wheel and the Actions grid on the way in, never a list left open from last
+  // time, and anything still picked up put back on the way out.
   if (changed && id === "addons") addonsTabReset();
+  if (changed) { actionsTabReset(); shortcutsTabReset(); }
   // The counts, if the host's copy is over five minutes old; it answers with an addons push.
   if (changed && id === "addons") send({ cmd: "addonsOpened" });
   renderSettings();
@@ -4850,6 +4861,7 @@ function renderSettingsNav() {
     counts[cat] = (counts[cat] || 0) + 1;
   });
   counts.actions = shownApps().length;
+  counts.shortcuts = scAllItems().length;
   counts.addons = addonItems("theme").concat(addonItems("extension")).filter(a => a.installed).length;
 
   // Built once; from then on only the active mark and the counts change, so the tab's own
@@ -4923,6 +4935,12 @@ function renderSettings() {
   const hovered = underPointer();
   if (hovered && hovered.dataset.settingsTab !== undefined) settingsPane = "nav";
   else if (hovered) { settingsPane = "rows"; settingsIdx = parseInt(hovered.dataset.rowIndex, 10) || 0; }
+  // Shortcuts, and an app's actions, are not rows at all but a wheel to arrange (wheeledit.js),
+  // drawn into the same scroller with its spokes as the focusables. It draws its own legend and
+  // highlight.
+  const wheel = activeWheelModel();
+  if (wheel) { weRender(wheel, scope, underPointer); return; }
+  $("settingsScroll").classList.remove("sc-mode");
   // The legend changes with the pane: on the categories B leaves Settings, inside the options it
   // only steps back to the categories, and saying so is cheaper than letting people find out.
   const footEl = $("settingsFoot");
@@ -4937,10 +4955,8 @@ function renderSettings() {
     : settingsTab === "addons" ? (addonsUi.level === "grid"
         ? foot(["A", "View details"], ["Y", "Options"], ["X", "Sort: " + addonSortLabel()], ["LB", "Themes"], ["RB", "Extensions"], ["B", "Categories"])
         : foot(["A", aLabel], ["B", "Back"]))
-    : settingsTab !== "actions" ? foot(["A", aLabel], ["B", "Categories"])
-    : actionsUi.level === "apps" ? foot(["A", "Open"], ["B", "Categories"])
-    : actionsUi.level === "app" ? foot(["A", "Edit"], ["B", "Back"])
-    : foot(["A", aLabel], ["B", "Back"]);
+    : settingsTab === "actions" ? foot(["A", "Open"], ["B", "Categories"])
+    : foot(["A", aLabel], ["B", "Categories"]);
   const scroll = $("settingsScroll");
   // The Actions and Add-ons grids are the same scroller laid out as tiles; everything else is rows.
   scroll.classList.toggle("apps-grid", actionsGridMode() || addonsGridMode());
@@ -4964,9 +4980,9 @@ function renderSettings() {
     fi++;
     nodes.push({ row: r, idx: fi, html: r.tile ? (settingsTab === "addons" ? addonTileHtml(r) : actionsTileHtml(r)) : settingsRowHtml(r, true) });
   });
-  // The Actions category's level is part of the shape: its list and its editor are different
-  // rows under one tab, and the level tag is what makes the drill-down rebuild. Add-ons too.
-  const levelTag = settingsTab === "actions" ? `|${actionsUi.level}:${actionsUi.appId}:${actionsUi.actionId}`
+  // The Actions category's level is part of the shape (its grid and an app's wheel are different
+  // things under one tab), and Add-ons' too.
+  const levelTag = settingsTab === "actions" ? `|${actionsUi.level}:${actionsUi.appId}`
     : settingsTab === "addons" ? addonsLevelTag() : "";
   const shape = settingsTab + levelTag + "|" + nodes.map(n => n.header ? "h" : n.section !== undefined ? "s:" + n.section : n.row.tile ? "t" : "r").join("|");
   if (scroll.__shape !== shape) {
@@ -5097,6 +5113,10 @@ function settingsInput(btn) {
   // the categories; both come round at the ends.
   const inRows = (x) => x.dataset.rowIndex !== undefined;
   const inTabs = (x) => x.dataset.settingsTab !== undefined;
+  // On a wheel (Shortcuts, an app's actions) every button is the editor's: the D-pad goes round
+  // the ring as it does on the Power Wheel, and B is the way back.
+  const wheel = activeWheelModel();
+  if (wheel && !onTab && (settingsPane === "rows" || wheel.ui.moving) && weInput(wheel, btn)) return;
   switch (btn) {
     case "Up": case "Down":
       if (row ? paneMove(btn, inRows) : onTab ? paneMove(btn, inTabs) : navMove(btn)) syncSettingsPane();
@@ -5141,8 +5161,8 @@ function settingsInput(btn) {
       break;
 
     // Back steps out to the categories first, and only leaves Settings from there. Inside the
-    // Actions category it first climbs back out of an app's list or an action's editor; inside
-    // Add-ons, out of an add-on's page.
+    // Actions category it first climbs back out of an app's wheel (the wheel editor does that, as its
+    // B); inside Add-ons, out of an add-on's page.
     case "B":
       if (onTab) switchView("library");
       else if (settingsTab === "actions" && actionsBack()) break;
@@ -5931,7 +5951,9 @@ let choiceState = null;   // { title, items, idx, onBack }
 
 function openChoice(title, items, opts = {}) {
   const idx = Math.max(0, items.findIndex(i => !i.cat && i.checked));
-  choiceState = { title, items, idx, onBack: opts.onBack || null };
+  // `jump`: the two legend words for LB and RB, which jump a heading at a time through a long list
+  // (the shortcuts' A-to-Z app and game pickers). Lists without it are unchanged.
+  choiceState = { title, items, idx, onBack: opts.onBack || null, jump: opts.jump || null };
   showOverlay("overlay-choice");
   // A fresh list opens at its own ticked row, already in place: renderMenu keeps the scroll of
   // whatever list was here before, and a Settings value can be forty rows down (a slider's
@@ -5956,8 +5978,9 @@ function renderChoice() {
   const focusable = items.map((r, i) => r.cat ? -1 : i).filter(i => i >= 0);
   if (!focusable.includes(choiceState.idx)) choiceState.idx = focusable[0] ?? 0;
   $("choiceTitle").textContent = title.toUpperCase();
+  const jump = choiceState.jump && choiceSections().length > 2 ? choiceState.jump : null;
   renderMenu($("choiceList"), $("choiceFoot"), items, choiceState.idx,
-    foot(["A", "Choose"], ["B", choiceState.onBack ? "Back" : "Cancel"]),
+    foot(["A", "Choose"], ...(jump ? [["LB", jump[0]], ["RB", jump[1]]] : []), ["B", choiceState.onBack ? "Back" : "Cancel"]),
     (i) => { if (choiceState && choiceState.idx !== i) { choiceState.idx = i; renderChoice(); } },
     (i) => { if (choiceState) { choiceState.idx = i; choiceActivate(); } });
 }
@@ -5969,12 +5992,37 @@ function choiceActivate() {
   item.action();
 }
 
+/* The first row under each heading, in order: where LB and RB land in a list that jumps. */
+function choiceSections() {
+  const starts = [];
+  choiceState.items.forEach((r, i) => {
+    if (!r.cat) return;
+    const first = choiceState.items.findIndex((x, j) => j > i && !x.cat);
+    if (first >= 0 && !starts.includes(first)) starts.push(first);
+  });
+  return starts;
+}
+
 function choiceInput(btn) {
   switch (btn) {
     case "Up": case "Down":
       choiceState.idx = menuStep(btn, choiceState.idx, choiceState.items.length);
       renderChoice();
       break;
+    case "LB": case "RB": {
+      const starts = choiceState.jump ? choiceSections() : [];
+      if (starts.length < 3) break;
+      const cur = choiceState.idx;
+      // The heading the highlight is under; LB goes to its first row, or the one before when it
+      // is already there, and both come round at the ends like every list.
+      let here = -1;
+      starts.forEach((s, k) => { if (s <= cur) here = k; });
+      const k = btn === "RB" ? (here + 1) % starts.length
+        : here < 0 ? starts.length - 1 : starts[here] < cur ? here : (here - 1 + starts.length) % starts.length;
+      choiceState.idx = starts[k];
+      renderChoice();
+      break;
+    }
     case "A": if (focusVisible()) choiceActivate(); break;
     case "B": { const back = choiceState.onBack; closeChoice(); if (back) back(); break; }
   }
@@ -6229,7 +6277,7 @@ $("inputField").addEventListener("keydown", (e) => {
  */
 let claimedButtons = "";
 function publishClaims() {
-  const overlayUp = overlayOpen() || radialOpen || !!radialSub || actionWheelOpen || ingameOpen
+  const overlayUp = overlayOpen() || radialOpen || !!radialSub || actionWheelOpen || shortcutWheelOpen || ingameOpen
     || document.body.classList.contains("overlay-mode");
   // View for search and LB for the Stats screen, both on the library only.
   const want = view === "library" && !overlayUp && !searchOpen ? (themeLib.page === "games" ? "View,LB,RB" : "View,LB") : "";
@@ -6385,7 +6433,7 @@ function openGuide() {
    and the wheel paints over a confirm). They try again every few seconds until then. */
 function busyForPrompt() {
   return view === "onboarding" || S.gameRunning || overlayMode || overlayOpen()
-    || radialOpen || !!radialSub || ingameOpen || actionWheelOpen || searchOpen;
+    || radialOpen || !!radialSub || ingameOpen || actionWheelOpen || shortcutWheelOpen || searchOpen;
 }
 
 let pendingWhatsNew = null, whatsNewTimer = 0;
@@ -6735,6 +6783,7 @@ function handleInput(btn, src) {
   if (keyPick) { keyPickInput(btn); return; }
   if (searchOpen) { searchInput(btn); return; }
   if (actionWheelOpen) { actionWheelInput(btn); return; }
+  if (shortcutWheelOpen) { shortcutWheelInput(btn); return; }
   if (radialSub) { radialSubInput(btn); return; }
   if (radialOpen) { radialInput(btn); return; }
   if (ingameOpen) { ingameInput(btn); return; }
@@ -6921,7 +6970,7 @@ function handleHostMessage(m) {
       S.mods = m.mods || null;
       // A state push carries the apps without their icons (see ActionsPayload on the host); the
       // icons that came with the last actions message are carried over by app id.
-      S.actions = withActionIcons(m.actions, S.actions);
+      onActionsData(m.actions, true);
       S.addons = m.addons || S.addons;
       S.xboxButton = m.xboxButton || null;
       // The wake facts ride along once the host has read them; a push from before that keeps
@@ -7035,6 +7084,7 @@ function handleHostMessage(m) {
       break;
     case "stick":
       if (actionWheelOpen) actionWheelStick(m.x, m.y);
+      else if (shortcutWheelOpen) shortcutWheelStick(m.x, m.y);
       else if (radialOpen && !radialSub) {
         const i = stickToSpoke(m.x, m.y, RADIAL_ITEMS.length);
         if (i !== radialIdx) { radialIdx = i; renderRadial(); }
@@ -7043,9 +7093,7 @@ function handleHostMessage(m) {
     // The actions list changed: an edit answered, or detection finished with icons. Only the
     // places that draw it are repainted; the library is never touched for this.
     case "actions":
-      S.actions = withActionIcons(m.actions, S.actions);
-      if (view === "settings" && settingsTab === "actions") renderSettings();
-      refreshActionWheel();
+      onActionsData(m.actions);
       break;
     // The add-ons list changed: an install landed, the repository was read, an extension's state
     // moved. The library is not rebuilt for it; a game's page is, since its facts may have come.
@@ -7068,6 +7116,27 @@ function handleHostMessage(m) {
       break;
     case "actionAppAdded":
       onActionAppAdded(m);
+      break;
+    // The Power Wheel's shortcuts (shortcuts.js): the whole list after any change, with the icons
+    // the host has found; the Start menu's apps for the picker and their icons; a file dialog's
+    // answer; and a button press on the desktop for a shortcut that asks first.
+    case "shortcuts":
+      onShortcuts(m.shortcuts);
+      break;
+    case "shortcutApps":
+      onShortcutApps(m);
+      break;
+    case "shortcutAppIcons":
+      onShortcutAppIcons(m);
+      break;
+    case "shortcutPicked":
+      onShortcutPicked(m);
+      break;
+    case "shortcutIconPicked":
+      onShortcutIconPicked(m);
+      break;
+    case "shortcutAsk":
+      onShortcutAsk(m);
       break;
     // A theme file changed on disk. The list carries a fresh cache-busting stamp, so
     // re-applying reloads the stylesheet without a restart.
@@ -7223,56 +7292,404 @@ const mockCollections = [
   { id: "c1", name: "Cozy evenings", gameIds: ["gog:salttide", "manual:foundrynine"] },
 ];
 
-/* A slice of the host's packs, so the wheel, the grid and the editor can be walked in the browser:
-   two browsers (one of them not "installed", to check it stays out of the grid), a player, the
-   Explorer, and an app the user added. Everywhere carries the bound-but-hidden arrows. */
+/* Preview only: the host's ActionService. A slice of the packs on their tabs, so the wheel, the grid
+   and the editor can be walked in the browser: two browsers (one of them not "installed", to check
+   it stays out of the grid), a player with an action taken off the wheel, the Explorer, and an app
+   the user added. Every edit comes back as an actions push, as the host's do. */
 const mockActions = (() => {
-  const A = (id, name, keys, button = null, hidden = false, danger = false) => ({ id, name, keys, button, hidden, custom: false, danger });
-  const browser = (downloads, priv) => [
-    A("new-tab", "New tab", "Ctrl+T", "Y"), A("close-tab", "Close tab", "Ctrl+W"), A("reopen-tab", "Reopen closed tab", "Ctrl+Shift+T"),
-    A("next-tab", "Next tab", "Ctrl+Tab"), A("prev-tab", "Previous tab", "Ctrl+Shift+Tab"), A("back", "Back", "Alt+Left", "X"),
-    A("forward", "Forward", "Alt+Right"), A("reload", "Reload", "F5"), A("address", "Address bar", "Ctrl+L"), A("find", "Find in page", "Ctrl+F"),
-    A("fullscreen", "Full screen", "F11"), A("zoom-in", "Zoom in", "Ctrl+="), A("zoom-out", "Zoom out", "Ctrl+-"),
-    A("zoom-reset", "Reset zoom", "Ctrl+0", null, true), A("bookmark", "Bookmark this page", "Ctrl+D", null, true), A("history", "History", "Ctrl+H", null, true),
-    A("downloads", "Downloads", downloads, null, true), A("new-window", "New window", "Ctrl+N", null, true), A("private", "Private window", priv, null, true),
-    A("home", "Home page", "Alt+Home", null, true),
+  // ActionPacks' own tabs and words, printed from Models/Actions.cs by tools/mock-action-packs.mjs,
+  // as [id, name, keys, description, button?, danger?]. Regenerate rather than edit by hand.
+  const PACKS = [
+    { id: "everywhere", name: "Everywhere", exes: [], tabs: [
+      { id: "media", name: "Media", items: [
+        ["vol-up", "Volume up", "VolumeUp", "Turns the PC's volume up a step."],
+        ["vol-down", "Volume down", "VolumeDown", "Turns the PC's volume down a step."],
+        ["mute", "Mute", "VolumeMute", "Mutes the PC's sound, or brings it back."],
+        ["play-pause", "Play / pause", "MediaPlayPause", "Plays or pauses whatever is playing: music, a video, a podcast."],
+        ["next-track", "Next track", "MediaNext", "Skips to the next track in whatever is playing."],
+        ["prev-track", "Previous track", "MediaPrev", "Goes back to the previous track, or the start of this one."],
+      ] },
+      { id: "windows", name: "Windows", items: [
+        ["show-desktop", "Show desktop", "Win+D", "Moves every window aside to show the desktop. Press it again to bring them back."],
+        ["last-window", "Last window", "Alt+Tab", "Switches to the window you were using before this one."],
+        ["task-view", "Task view", "Win+Tab", "Shows every open window side by side, to pick one."],
+        ["maximize", "Maximize window", "Win+Up", "Makes the window in front fill the screen."],
+        ["snap-left", "Snap left", "Win+Left", "Puts the window in front on the left half of the screen."],
+        ["snap-right", "Snap right", "Win+Right", "Puts the window in front on the right half of the screen."],
+        ["screenshot", "Save a screenshot", "Win+PrintScreen", "Saves a picture of the whole screen in Pictures › Screenshots."],
+        ["close-window", "Close window", "Alt+F4", "Closes the window in front, as its X would. It may ask to save first.", null, true],
+      ] },
+      { id: "keys", name: "Keys", items: [
+        ["enter", "Enter", "Enter", "Presses Enter: confirms a question, or opens what is selected."],
+        ["escape", "Escape", "Esc", "Presses Escape: closes a menu or a question, or cancels."],
+        ["copy", "Copy", "Ctrl+C", "Copies what is selected, ready to paste somewhere."],
+        ["paste", "Paste", "Ctrl+V", "Puts in what was last copied or cut."],
+        ["undo", "Undo", "Ctrl+Z", "Takes back the last change."],
+        ["select-all", "Select all", "Ctrl+A", "Selects everything: all the text, or every file in a folder."],
+      ] },
+      { id: "arrows", name: "Arrows", items: [
+        ["arrow-up", "Arrow up", "Up", "The Up arrow key: up a step in a list, a menu or a page.", "Up"],
+        ["arrow-right", "Arrow right", "Right", "The Right arrow key: the next item, or forward in a video.", "Right"],
+        ["arrow-down", "Arrow down", "Down", "The Down arrow key: down a step in a list, a menu or a page.", "Down"],
+        ["arrow-left", "Arrow left", "Left", "The Left arrow key: the item before, or back in a video.", "Left"],
+      ] },
+    ] },
+    { id: "firefox", name: "Firefox", exes: ["firefox"], tabs: [
+      { id: "browse", name: "Browse", items: [
+        ["new-tab", "New tab", "Ctrl+T", "Opens a new tab, ready for an address or a search.", "Y"],
+        ["close-tab", "Close tab", "Ctrl+W", "Closes the tab you are on."],
+        ["back", "Back", "Alt+Left", "Goes back to the page before this one.", "X"],
+        ["forward", "Forward", "Alt+Right", "Goes forward again, after going back."],
+        ["reload", "Reload", "F5", "Loads the page again, to see anything new on it."],
+        ["address", "Address bar", "Ctrl+L", "Selects the address bar, to type an address or a search."],
+        ["find", "Find in page", "Ctrl+F", "Looks for a word or phrase on this page."],
+        ["fullscreen", "Full screen", "F11", "Fills the whole screen with the page. Press it again to go back."],
+      ] },
+      { id: "tabs", name: "Tabs & windows", items: [
+        ["reopen-tab", "Reopen closed tab", "Ctrl+Shift+T", "Brings back the tab you closed last."],
+        ["next-tab", "Next tab", "Ctrl+Tab", "Switches to the tab on the right."],
+        ["prev-tab", "Previous tab", "Ctrl+Shift+Tab", "Switches to the tab on the left."],
+        ["new-window", "New window", "Ctrl+N", "Opens another browser window."],
+        ["private", "Private window", "Ctrl+Shift+P", "Opens a private window, which forgets its history and sign-ins once closed."],
+        ["home", "Home page", "Alt+Home", "Goes to your home page."],
+      ] },
+      { id: "pages", name: "Zoom & pages", items: [
+        ["zoom-in", "Zoom in", "Ctrl+=", "Makes the page bigger, text and pictures alike."],
+        ["zoom-out", "Zoom out", "Ctrl+-", "Makes the page smaller, to fit more on the screen."],
+        ["zoom-reset", "Reset zoom", "Ctrl+0", "Puts the page back to its normal size."],
+        ["bookmark", "Bookmark this page", "Ctrl+D", "Saves the page as a bookmark, to find it again later."],
+        ["history", "History", "Ctrl+H", "Shows the pages you have visited."],
+        ["downloads", "Downloads", "Ctrl+Shift+Y", "Shows the files you have downloaded."],
+      ] },
+    ] },
+    { id: "chrome", name: "Google Chrome", exes: ["chrome"], tabs: [
+      { id: "browse", name: "Browse", items: [
+        ["new-tab", "New tab", "Ctrl+T", "Opens a new tab, ready for an address or a search.", "Y"],
+        ["close-tab", "Close tab", "Ctrl+W", "Closes the tab you are on."],
+        ["back", "Back", "Alt+Left", "Goes back to the page before this one.", "X"],
+        ["forward", "Forward", "Alt+Right", "Goes forward again, after going back."],
+        ["reload", "Reload", "F5", "Loads the page again, to see anything new on it."],
+        ["address", "Address bar", "Ctrl+L", "Selects the address bar, to type an address or a search."],
+        ["find", "Find in page", "Ctrl+F", "Looks for a word or phrase on this page."],
+        ["fullscreen", "Full screen", "F11", "Fills the whole screen with the page. Press it again to go back."],
+      ] },
+      { id: "tabs", name: "Tabs & windows", items: [
+        ["reopen-tab", "Reopen closed tab", "Ctrl+Shift+T", "Brings back the tab you closed last."],
+        ["next-tab", "Next tab", "Ctrl+Tab", "Switches to the tab on the right."],
+        ["prev-tab", "Previous tab", "Ctrl+Shift+Tab", "Switches to the tab on the left."],
+        ["new-window", "New window", "Ctrl+N", "Opens another browser window."],
+        ["private", "Private window", "Ctrl+Shift+N", "Opens a private window, which forgets its history and sign-ins once closed."],
+        ["home", "Home page", "Alt+Home", "Goes to your home page."],
+      ] },
+      { id: "pages", name: "Zoom & pages", items: [
+        ["zoom-in", "Zoom in", "Ctrl+=", "Makes the page bigger, text and pictures alike."],
+        ["zoom-out", "Zoom out", "Ctrl+-", "Makes the page smaller, to fit more on the screen."],
+        ["zoom-reset", "Reset zoom", "Ctrl+0", "Puts the page back to its normal size."],
+        ["bookmark", "Bookmark this page", "Ctrl+D", "Saves the page as a bookmark, to find it again later."],
+        ["history", "History", "Ctrl+H", "Shows the pages you have visited."],
+        ["downloads", "Downloads", "Ctrl+J", "Shows the files you have downloaded."],
+      ] },
+    ] },
+    { id: "vlc", name: "VLC", exes: ["vlc"], tabs: [
+      { id: "playback", name: "Playback", items: [
+        ["play-pause", "Play / pause", "Space", "Plays or pauses the video.", "X"],
+        ["fullscreen", "Full screen", "F", "Fills the screen with the video, or goes back to the window.", "Y"],
+        ["mute", "Mute", "M", "Mutes VLC's sound, or brings it back."],
+        ["skip-fwd", "Skip forward 10 s", "Alt+Right", "Jumps ten seconds ahead."],
+        ["skip-back", "Skip back 10 s", "Alt+Left", "Jumps ten seconds back."],
+        ["next", "Next", "N", "Plays the next item in the playlist."],
+        ["prev", "Previous", "P", "Plays the item before in the playlist."],
+        ["stop", "Stop", "S", "Stops playing and goes back to the start."],
+      ] },
+      { id: "tracks", name: "Tracks & speed", items: [
+        ["subtitles", "Subtitle track", "V", "Switches to the next subtitles, or turns them off."],
+        ["audio", "Audio track", "B", "Switches to the next audio track, such as another language."],
+        ["faster", "Faster", "]", "Plays a little faster."],
+        ["slower", "Slower", "[", "Plays a little slower."],
+        ["speed-normal", "Normal speed", "=", "Back to normal speed."],
+        ["playlist", "Playlist", "Ctrl+L", "Shows or hides the playlist."],
+      ] },
+      { id: "more", name: "More", items: [
+        ["vol-up", "Volume up", "Ctrl+Up", "Turns VLC's own volume up."],
+        ["vol-down", "Volume down", "Ctrl+Down", "Turns VLC's own volume down."],
+        ["open", "Open file", "Ctrl+O", "Picks a file to play."],
+        ["quit", "Quit VLC", "Ctrl+Q", "Closes VLC.", null, true],
+      ] },
+    ] },
+    { id: "spotify", name: "Spotify", exes: ["spotify"], tabs: [
+      { id: "playback", name: "Playback", items: [
+        ["play-pause", "Play / pause", "Space", "Plays or pauses the music.", "X"],
+        ["next", "Next track", "Ctrl+Right", "Skips to the next song.", "Y"],
+        ["prev", "Previous track", "Ctrl+Left", "Goes back to the song before."],
+        ["vol-up", "Volume up", "Ctrl+Up", "Turns Spotify's own volume up."],
+        ["vol-down", "Volume down", "Ctrl+Down", "Turns Spotify's own volume down."],
+        ["mute", "Mute", "Ctrl+Shift+Down", "Turns Spotify's volume all the way down."],
+        ["shuffle", "Shuffle", "Ctrl+S", "Turns shuffle on or off."],
+        ["repeat", "Repeat", "Ctrl+R", "Steps through repeat: off, the whole list, this song."],
+      ] },
+      { id: "browse", name: "Browse", items: [
+        ["search", "Search", "Ctrl+L", "Opens search, to find a song, an artist or a podcast."],
+        ["like", "Like this song", "Alt+Shift+B", "Saves the song playing to your Liked Songs."],
+        ["home", "Home", "Alt+Shift+H", "Goes to Spotify's home page."],
+        ["back", "Back", "Alt+Left", "Goes back to the page before."],
+        ["forward", "Forward", "Alt+Right", "Goes forward again, after going back."],
+      ] },
+    ] },
+    { id: "explorer", name: "File Explorer", exes: ["explorer"], tabs: [
+      { id: "navigate", name: "Navigate", items: [
+        ["back", "Back", "Alt+Left", "Goes back to the folder you were in before.", "X"],
+        ["forward", "Forward", "Alt+Right", "Goes forward again, after going back."],
+        ["up", "Up a folder", "Alt+Up", "Goes up to the folder this one is in.", "Y"],
+        ["open", "Open", "Enter", "Opens the file or folder that is selected."],
+        ["address", "Address bar", "Alt+D", "Selects the address bar, to type where to go."],
+        ["search", "Search", "Ctrl+E", "Searches this folder and every folder in it."],
+        ["refresh", "Refresh", "F5", "Updates the list of files."],
+      ] },
+      { id: "files", name: "Files", items: [
+        ["new-folder", "New folder", "Ctrl+Shift+N", "Makes a new folder here."],
+        ["rename", "Rename", "F2", "Renames the file or folder that is selected."],
+        ["delete", "Delete", "Delete", "Moves what is selected to the Recycle Bin."],
+        ["cut", "Cut", "Ctrl+X", "Takes what is selected, to paste it somewhere else."],
+        ["copy", "Copy", "Ctrl+C", "Copies what is selected, to paste somewhere else."],
+        ["paste", "Paste", "Ctrl+V", "Puts what was cut or copied into this folder."],
+        ["select-all", "Select all", "Ctrl+A", "Selects every file and folder here."],
+        ["properties", "Properties", "Alt+Enter", "Shows the size, dates and other details of what is selected."],
+      ] },
+      { id: "window", name: "Window", items: [
+        ["new-window", "New window", "Ctrl+N", "Opens another File Explorer window."],
+        ["close", "Close window", "Ctrl+W", "Closes this File Explorer window.", null, true],
+      ] },
+    ] },
   ];
+  const A = (id, name, keys, desc, button = null, danger = false) => ({ id, name, keys, desc, button, custom: false, danger, edited: false });
+  const T = (id, name, ...items) => ({ id, name, items });
   const icon = (hue) => "data:image/svg+xml," + encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="hsl(${hue} 70% 50%)"/><circle cx="32" cy="32" r="12" fill="white" fill-opacity="0.85"/></svg>`);
-  const app = (id, name, exes, actions, extra = {}) => ({ id, name, exes, custom: false, pinned: false, installed: true, modified: false, icon: null, actions, ...extra });
-  return { apps: [
-    app("everywhere", "Everywhere", [], [
-      A("vol-up", "Volume up", "VolumeUp"), A("vol-down", "Volume down", "VolumeDown"), A("mute", "Mute", "VolumeMute"),
-      A("play-pause", "Play / pause", "MediaPlayPause"), A("next-track", "Next track", "MediaNext"), A("prev-track", "Previous track", "MediaPrev"),
-      A("show-desktop", "Show desktop", "Win+D"), A("last-window", "Last window", "Alt+Tab"), A("task-view", "Task view", "Win+Tab"),
-      A("maximize", "Maximize window", "Win+Up"), A("snap-left", "Snap left", "Win+Left"), A("snap-right", "Snap right", "Win+Right"),
-      A("screenshot", "Save a screenshot", "Win+PrintScreen"), A("enter", "Enter", "Enter"), A("escape", "Escape", "Esc"),
-      A("close-window", "Close window", "Alt+F4", null, false, true),
-      A("arrow-up", "Arrow up", "Up", "Up", true), A("arrow-down", "Arrow down", "Down", "Down", true),
-      A("arrow-left", "Arrow left", "Left", "Left", true), A("arrow-right", "Arrow right", "Right", "Right", true),
-      A("copy", "Copy", "Ctrl+C", null, true), A("paste", "Paste", "Ctrl+V", null, true), A("undo", "Undo", "Ctrl+Z", null, true), A("select-all", "Select all", "Ctrl+A", null, true),
-    ]),
-    app("firefox", "Firefox", ["firefox"], browser("Ctrl+Shift+Y", "Ctrl+Shift+P"), { icon: icon(25) }),
-    app("chrome", "Google Chrome", ["chrome"], browser("Ctrl+J", "Ctrl+Shift+N"), { installed: false }),
-    app("vlc", "VLC", ["vlc"], [
-      A("play-pause", "Play / pause", "Space", "X"), A("fullscreen", "Full screen", "F", "Y"), A("mute", "Mute", "M"),
-      A("skip-fwd", "Skip forward 10 s", "Alt+Right"), A("skip-back", "Skip back 10 s", "Alt+Left"), A("next", "Next", "N"), A("prev", "Previous", "P"),
-      A("subtitles", "Subtitle track", "V"), A("audio", "Audio track", "B"), A("faster", "Faster", "]"), A("slower", "Slower", "["), A("stop", "Stop", "S"),
-      A("playlist", "Playlist", "Ctrl+L"), A("quit", "Quit VLC", "Ctrl+Q", null, true, true),
-    ], { icon: icon(30) }),
-    app("explorer", "File Explorer", ["explorer"], [
-      A("back", "Back", "Alt+Left", "X"), A("forward", "Forward", "Alt+Right"), A("up", "Up a folder", "Alt+Up", "Y"), A("open", "Open", "Enter"),
-      A("new-folder", "New folder", "Ctrl+Shift+N"), A("rename", "Rename", "F2"), A("delete", "Delete", "Delete"), A("copy", "Copy", "Ctrl+C"),
-      A("paste", "Paste", "Ctrl+V"), A("select-all", "Select all", "Ctrl+A"), A("address", "Address bar", "Alt+D"), A("search", "Search", "Ctrl+E"), A("refresh", "Refresh", "F5"),
-    ], { icon: icon(45) }),
-    app("spotify", "Spotify", ["spotify"], [A("play-pause", "Play / pause", "Space", "X"), A("next", "Next track", "Ctrl+Right", "Y")], { installed: false }),
-    app("plex", "Plex", ["plex"], [
-      { ...A("c1a2b3c4", "Play / pause", "Space", "X"), custom: true },
-      { ...A("c5d6e7f8", "Full screen", "F"), custom: true },
-    ], { custom: true }),
-  ] };
+  const app = (id, extra = {}) => {
+    const p = PACKS.find(x => x.id === id);
+    return { id, name: p.name, exes: p.exes, custom: false, pinned: false, installed: true, modified: false, icon: null, spare: [],
+      tabs: p.tabs.map(t => ({ id: t.id, name: t.name, items: t.items.map(a => A(...a)) })), ...extra };
+  };
+  const packs = () => {
+    // One of VLC's own taken off the wheel, so its + spoke has something to offer.
+    const vlc = app("vlc", { icon: icon(30), modified: true });
+    vlc.spare = [vlc.tabs[vlc.tabs.length - 1].items.pop()];
+    return [
+      app("everywhere"),
+      app("firefox", { icon: icon(25) }),
+      app("chrome", { installed: false }),
+      vlc,
+      app("explorer", { icon: icon(45) }),
+      app("spotify", { installed: false }),
+      { id: "plex", name: "Plex", exes: ["plex"], custom: true, pinned: false, installed: true, modified: false, icon: null, spare: [], tabs: [T("main", "Actions",
+        { ...A("c1a2b3c4", "Play / pause", "Space", "Plays or pauses what is on.", "X"), custom: true },
+        { ...A("c5d6e7f8", "Full screen", "F", null), custom: true })] },
+    ];
+  };
+  const pristine = packs();
+  const apps = packs();
+  const payload = () => JSON.parse(JSON.stringify({ apps, maxItems: 8, maxTabs: 12 }));
+  const push = () => handleHostMessage({ type: "actions", actions: payload() });
+  const find = (id) => apps.find(a => a.id === id);
+  const locate = (app, id) => { for (const t of app.tabs) { const i = t.items.findIndex(x => x.id === id); if (i >= 0) return { t, i }; } return null; };
+  const packDef = (app, id) => { const p = pristine.find(a => a.id === app.id); return p && p.tabs.flatMap(t => t.items).concat(p.spare).find(x => x.id === id); };
+  const touch = (app) => { if (!app.custom) app.modified = true; };
+  const handle = (msg) => {
+    const app = find(msg.appId);
+    switch (msg.cmd) {
+      case "actionFire": {
+        const at = app && locate(app, msg.actionId);
+        toast(`(preview) would send ${at ? at.t.items[at.i].keys : "?"} to ${app ? app.name : "?"}`);
+        return;
+      }
+      case "actionUpdate": {
+        if (!app) break;
+        const at = locate(app, msg.action.id);
+        const def = packDef(app, msg.action.id);
+        const next = { ...(def || { custom: true, danger: false }), ...msg.action, custom: !def };
+        if (def && !next.desc) next.desc = def.desc;   // an emptied description is the pack's again
+        next.edited = !!def && (next.name !== def.name || next.keys !== def.keys || (next.button || null) !== (def.button || null) || next.desc !== def.desc);
+        if (at) at.t.items[at.i] = next;
+        else {
+          const t = app.tabs.find(x => x.id === msg.tabId) || app.tabs[app.tabs.length - 1];
+          if (t && t.items.length < 8) t.items.splice(msg.index ?? t.items.length, 0, next);
+          app.spare = app.spare.filter(x => x.id !== next.id);
+        }
+        touch(app);
+        break;
+      }
+      case "actionRestore": {
+        const at = app && locate(app, msg.actionId), def = app && packDef(app, msg.actionId);
+        if (at && def) at.t.items[at.i] = { ...def };
+        break;
+      }
+      case "actionRemove": {
+        const at = app && locate(app, msg.actionId);
+        if (!at) break;
+        const [gone] = at.t.items.splice(at.i, 1);
+        const def = packDef(app, gone.id);
+        if (def) app.spare.push({ ...def });
+        touch(app);
+        break;
+      }
+      case "actionMove": {
+        const at = app && locate(app, msg.actionId), to = app && app.tabs.find(x => x.id === msg.tabId);
+        if (at && to && (to === at.t || to.items.length < 8)) { const [it] = at.t.items.splice(at.i, 1); to.items.splice(Math.min(msg.index, to.items.length), 0, it); touch(app); }
+        break;
+      }
+      case "actionTabAdd": if (app && app.tabs.length < 12) { app.tabs.splice(msg.index ?? app.tabs.length, 0, { id: msg.id, name: msg.name, items: [] }); touch(app); } break;
+      case "actionTabRename": { const t = app && app.tabs.find(x => x.id === msg.id); if (t) { t.name = msg.name; touch(app); } break; }
+      case "actionTabMove": { const i = app ? app.tabs.findIndex(x => x.id === msg.id) : -1; if (i >= 0) { const [t] = app.tabs.splice(i, 1); app.tabs.splice(msg.index, 0, t); touch(app); } break; }
+      case "actionTabRemove": {
+        const t = app && app.tabs.length > 1 && app.tabs.find(x => x.id === msg.id);
+        if (!t) { toast("The last tab stays: actions need a tab to go on"); break; }
+        app.tabs = app.tabs.filter(x => x !== t);
+        t.items.forEach(a => { const def = packDef(app, a.id); if (def) app.spare.push({ ...def }); });
+        touch(app);
+        break;
+      }
+      case "actionAppReset": {
+        const was = pristine.find(a => a.id === msg.appId);
+        if (app && was) { app.tabs = JSON.parse(JSON.stringify(was.tabs)); app.tabs[app.tabs.length - 1].items.push(...JSON.parse(JSON.stringify(was.spare))); app.spare = []; app.modified = false; }
+        break;
+      }
+      case "actionAppRemove": {
+        const i = apps.findIndex(a => a.id === msg.appId);
+        if (i >= 0) { if (apps[i].custom) apps.splice(i, 1); else { apps[i].installed = false; apps[i].pinned = false; } }
+        break;
+      }
+      case "actionAppRename": if (app) app.name = msg.name; break;
+      case "actionAppAdd": case "actionAppBrowse": {
+        const exe = msg.cmd === "actionAppBrowse" ? "notepad" : msg.exe;
+        const name = msg.cmd === "actionAppBrowse" ? "Notepad" : (msg.name || exe);
+        let a = apps.find(x => x.exes.includes(exe));
+        const existed = !!(a && a.installed);
+        if (a) { a.installed = true; a.pinned = !a.custom; }
+        else { a = { id: exe, name, exes: [exe], custom: true, pinned: false, installed: true, modified: false, icon: null, tabs: [T("main", "Actions")], spare: [] }; apps.push(a); }
+        push();
+        setTimeout(() => handleHostMessage({ type: "actionAppAdded", id: a.id, existed }), 150);
+        return;
+      }
+    }
+    push();
+  };
+  return { payload, handle };
 })();
-const mockActionsPristine = JSON.parse(JSON.stringify(mockActions));
+
+/* Preview only: the host's ShortcutService. The System tab Loungepad starts with, a tab with an
+   app, a website, a folder, a game and a missing program, and one of power actions and commands;
+   the catalogue as the host sends it; a Start menu to pick from; the file dialogs answering with a
+   made-up path. Every edit goes through the same checks' spirit and comes back as a push. */
+const mockShortcuts = (() => {
+  const B = (id, name, icon, group, desc, extra = {}) => ({ id, name, icon, group, desc, confirm: false, danger: false, ...extra });
+  const catalog = [
+    B("explorer", "File Explorer", "folder", "windows", "Your files and drives"),
+    B("settings", "Windows Settings", "gear", "windows", "Every setting Windows has"),
+    B("displaySettings", "Display Settings", "monitor", "windows", "Resolution, HDR, scaling and which screen is which"),
+    B("soundSettings", "Sound Settings", "volume", "windows", "Which speakers and microphone are in use"),
+    B("bluetoothSettings", "Bluetooth & devices", "gamepad", "windows", "Pair a controller, headphones or a keyboard"),
+    B("networkSettings", "Network & internet", "globe", "windows", "Wi-Fi, Ethernet and VPN"),
+    B("windowsUpdate", "Windows Update", "refresh", "windows", "Check for and install updates"),
+    B("volume", "Volume Mixer", "volume", "windows", "Each program's own volume"),
+    B("lock", "Lock PC", "lock", "power", "Show the Windows lock screen"),
+    B("rest", "Rest", "moon", "power", "Screen off and the game paused. Any button brings both back"),
+    B("sleepPc", "Sleep PC", "sleep", "power", "Rest, then put the PC to sleep"),
+    B("signOut", "Sign out", "signOut", "power", "Close everything and sign out of Windows", { confirm: true, danger: true }),
+    B("restart", "Restart PC", "restart", "power", "Close everything and restart the PC", { confirm: true, danger: true }),
+    B("shutdown", "Shut down", "power", "power", "Close everything and turn the PC off", { confirm: true, danger: true }),
+  ];
+  const icon = (hue) => "data:image/svg+xml," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="6" y="6" width="52" height="52" rx="14" fill="hsl(${hue} 65% 48%)"/><circle cx="32" cy="32" r="11" fill="white" fill-opacity="0.9"/></svg>`);
+  const item = (id, name, kind, target, extra = {}) => ({ id, name, kind, target, args: null, startIn: null, exe: null, console: null, confirm: false, iconFile: null, button: null, ...extra });
+  const defaults = () => [{ id: "system", name: "System", items: ["explorer", "settings", "displaySettings", "volume", "lock", "sleepPc"]
+    .map(id => item("d-" + id.toLowerCase(), catalog.find(b => b.id === id).name, "builtin", id)) }];
+  let tabs = defaults().concat([
+    { id: "media", name: "Media", items: [
+      item("m1", "Spotify", "app", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", { button: "LB + X" }),
+      item("m2", "YouTube", "url", "https://www.youtube.com/"),
+      item("m3", "Videos", "folder", "C:\\Users\\couch\\Videos"),
+      item("m4", "Hollowmark", "game", "steam:hollowmarksecondascent"),
+      item("m5", "Old player", "program", "D:\\Apps\\OldPlayer\\player.exe"),
+    ] },
+    { id: "tools", name: "Tools", items: [
+      item("t1", "Restart PC", "builtin", "restart"),
+      item("t2", "Flush DNS", "command", "ipconfig /flushdns", { console: "hide", confirm: true }),
+      item("t3", "Backup", "command", "D:\\Scripts\\backup.ps1"),
+    ] },
+  ]);
+  // The icons the host would have found: an app's, a folder's and a script's, and YouTube's own favicon.
+  const looks = { m1: [icon(140), false], m2: [icon(0), false], m3: [icon(45), false], m5: [null, true], t3: [icon(210), false] };
+  // Pictures picked with "Choose an icon…", by shortcut.
+  const customs = {};
+  const apps = ["Calculator", "Discord", "Firefox", "GIMP", "Microsoft Edge", "Netflix", "Notepad", "OBS Studio", "Paint",
+    "Plex", "Spotify", "Steam", "Terminal", "VLC media player", "Xbox", "Zoom"].map((name, i) => ({
+    id: name.replace(/\W/g, "") + (i % 3 === 0 ? "_8wekyb3d8bbwe!App" : ""), name, exe: i % 3 === 0 ? null : `C:\\Program Files\\${name}\\${name.replace(/\W/g, "")}.exe`, packaged: i % 3 === 0 }));
+  const payload = () => ({
+    tabs: tabs.map(t => ({ ...t, items: t.items.map(i => ({ ...i, customIcon: i.iconFile ? customs[i.id] || null : null, autoIcon: (looks[i.id] || [])[0] || null, missing: !!(looks[i.id] || [])[1] })) })),
+    catalog,
+    knownFolders: ["Downloads", "Documents", "Desktop", "Pictures", "Videos", "Music"].map(n => ({ id: n.toLowerCase(), name: n, path: `C:\\Users\\couch\\${n}` })),
+    maxItems: 8, maxTabs: 12,
+  });
+  const push = () => handleHostMessage({ type: "shortcuts", shortcuts: payload() });
+  const locate = (id) => { for (const t of tabs) { const i = t.items.findIndex(x => x.id === id); if (i >= 0) return { t, i }; } return null; };
+  const handle = (msg) => {
+    switch (msg.cmd) {
+      case "shortcutRun": {
+        const at = locate(msg.id);
+        toast(at ? `(preview) would open ${at.t.items[at.i].name}${msg.confirmed ? " (confirmed)" : ""}` : "That shortcut is gone");
+        return;
+      }
+      case "shortcutSave": {
+        const at = locate(msg.item.id);
+        const clean = { ...msg.item };
+        if (at) at.t.items[at.i] = clean;
+        else { const t = tabs.find(x => x.id === msg.tabId); if (t && t.items.length < 8) t.items.splice(msg.index ?? t.items.length, 0, clean); }
+        if (clean.kind === "app" || clean.kind === "program" || clean.kind === "folder" || clean.kind === "file")
+          setTimeout(() => { looks[clean.id] = looks[clean.id] || [icon((clean.name.length * 37) % 360), false]; push(); }, 400);
+        break;
+      }
+      case "shortcutRemove": { const at = locate(msg.id); if (at) at.t.items.splice(at.i, 1); break; }
+      case "shortcutMove": {
+        const at = locate(msg.id), to = tabs.find(x => x.id === msg.tabId);
+        if (at && to) { const [it] = at.t.items.splice(at.i, 1); to.items.splice(Math.min(msg.index, to.items.length), 0, it); }
+        break;
+      }
+      case "shortcutTabAdd": tabs.splice(msg.index ?? tabs.length, 0, { id: msg.id, name: msg.name, items: [] }); break;
+      case "shortcutTabRename": { const t = tabs.find(x => x.id === msg.id); if (t) t.name = msg.name; break; }
+      case "shortcutTabMove": { const i = tabs.findIndex(x => x.id === msg.id); if (i >= 0) { const [t] = tabs.splice(i, 1); tabs.splice(msg.index, 0, t); } break; }
+      case "shortcutTabRemove": if (tabs.length > 1) tabs = tabs.filter(x => x.id !== msg.id); break;
+      case "shortcutsReset": tabs = defaults(); break;
+      case "shortcutApps":
+        setTimeout(() => {
+          handleHostMessage({ type: "shortcutApps", apps });
+          setTimeout(() => handleHostMessage({ type: "shortcutAppIcons", icons: Object.fromEntries(apps.map((a, i) => [a.id, icon(i * 23)])) }), 500);
+        }, 300);
+        return;
+      // As the host does after its dialog: the picture stored, the list pushed, then the answer.
+      case "shortcutIconPick": {
+        const at = locate(msg.id);
+        setTimeout(() => {
+          if (at) {
+            at.t.items[at.i].iconFile = `ic-${msg.id}-a1b2c3.png`;
+            customs[msg.id] = "data:image/svg+xml," + encodeURIComponent(
+              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="#e85d75"/><path d="M20 34l8 8 16-18" stroke="white" stroke-width="6" fill="none" stroke-linecap="round"/></svg>`);
+            push();
+          }
+          handleHostMessage({ type: "shortcutIconPicked", id: msg.id, ok: !!at, error: null });
+        }, 300);
+        return;
+      }
+      case "shortcutBrowse": {
+        const paths = { program: "C:\\Program Files\\Moonlight\\Moonlight.exe", file: "C:\\Users\\couch\\Documents\\Controls.pdf", folder: "D:\\Games\\Mods", script: "D:\\Scripts\\backup.ps1" };
+        const names = { program: "Moonlight", file: "Controls", folder: "Mods", script: "backup" };
+        setTimeout(() => handleHostMessage({ type: "shortcutPicked", kind: msg.kind, path: paths[msg.kind] || null, name: names[msg.kind] || null }), 300);
+        return;
+      }
+    }
+    push();
+  };
+  return { payload, handle };
+})();
 
 /* Preview only: Settings → Add-ons' list, as the host's AddonsPayload gives it. Two themes
    installed (the bundled one and a hand-dropped one), one extension running with options, one
@@ -7708,7 +8125,7 @@ function mockHandle(msg) {
         gamePass: { count: 0, fetchedAt: null, error: null },
       },
       emulation: mockEmulation,
-      actions: mockActions,
+      actions: mockActions.payload(),
       addons: mockAddons.payload(),
       xboxButton: { ...mockXboxButton },
       mods: { installed: true, path: "C:\\Users\\couch\\AppData\\Local\\Programs\\Vortex\\Vortex.exe", version: "1.13.7", running: true },
@@ -7748,6 +8165,7 @@ function mockHandle(msg) {
 
   if (msg.cmd === "ready") {
     setTimeout(pushState, 60);
+    setTimeout(() => handleHostMessage({ type: "shortcuts", shortcuts: mockShortcuts.payload() }), 80);
     // The bundled theme, read off the same server, so the preview's Appearance screen has a theme
     // with options to show and the Loungepad theme can be switched to. The server's root is
     // Loungepad/, which is what makes /themes/loungepad/… reachable at all; a server rooted
@@ -8010,10 +8428,11 @@ function mockHandle(msg) {
     mockHandle._titles = mockHandle._titles || {};
     mockHandle._titles[msg.id] = msg.title;
     pushState();
-  } else if (msg.cmd === "actionFire") {
-    const app = mockActions.apps.find(a => a.id === msg.appId);
-    const a = app && app.actions.find(x => x.id === msg.actionId);
-    toast(`(preview) would send ${a ? a.keys : "?"} to ${app ? app.name : "?"}`);
+  } else if (msg.cmd && msg.cmd.startsWith("shortcut")) {
+    mockShortcuts.handle(msg);
+  } else if (["actionFire", "actionUpdate", "actionRestore", "actionRemove", "actionMove", "actionTabAdd", "actionTabRename",
+      "actionTabMove", "actionTabRemove", "actionAppReset", "actionAppRemove", "actionAppRename", "actionAppAdd", "actionAppBrowse"].includes(msg.cmd)) {
+    mockActions.handle(msg);
   } else if (msg.cmd === "actionCapture") {
     // What the pad "presses", in turn: a plain button, then the two the host refuses, a chord, a
     // direction, and a stick click, so every path of the dialog gets walked.
@@ -8029,41 +8448,6 @@ function mockHandle(msg) {
     }, 900);
   } else if (msg.cmd === "actionCaptureCancel") {
     clearTimeout(mockHandle._captureTimer);
-  } else if (msg.cmd === "actionUpdate") {
-    const app = mockActions.apps.find(a => a.id === msg.appId);
-    if (app) {
-      const i = app.actions.findIndex(x => x.id === msg.action.id);
-      if (i >= 0) app.actions[i] = { ...app.actions[i], ...msg.action };
-      else app.actions.push({ ...msg.action, custom: true });
-      if (!app.custom) app.modified = true;
-    }
-    handleHostMessage({ type: "actions", actions: mockActions });
-  } else if (msg.cmd === "actionRemove") {
-    const app = mockActions.apps.find(a => a.id === msg.appId);
-    if (app) { const i = app.actions.findIndex(x => x.id === msg.actionId); if (i >= 0) app.actions.splice(i, 1); }
-    handleHostMessage({ type: "actions", actions: mockActions });
-  } else if (msg.cmd === "actionAppReset") {
-    const app = mockActions.apps.find(a => a.id === msg.appId);
-    const was = mockActionsPristine.apps.find(a => a.id === msg.appId);
-    if (app && was) { app.actions = JSON.parse(JSON.stringify(was.actions)); app.modified = false; }
-    handleHostMessage({ type: "actions", actions: mockActions });
-  } else if (msg.cmd === "actionAppRemove") {
-    const i = mockActions.apps.findIndex(a => a.id === msg.appId);
-    if (i >= 0) { if (mockActions.apps[i].custom) mockActions.apps.splice(i, 1); else { mockActions.apps[i].installed = false; mockActions.apps[i].pinned = false; } }
-    handleHostMessage({ type: "actions", actions: mockActions });
-  } else if (msg.cmd === "actionAppRename") {
-    const app = mockActions.apps.find(a => a.id === msg.appId);
-    if (app) app.name = msg.name;
-    handleHostMessage({ type: "actions", actions: mockActions });
-  } else if (msg.cmd === "actionAppAdd" || msg.cmd === "actionAppBrowse") {
-    const exe = msg.cmd === "actionAppBrowse" ? "notepad" : msg.exe;
-    const name = msg.cmd === "actionAppBrowse" ? "Notepad" : (msg.name || exe);
-    let app = mockActions.apps.find(a => a.exes.includes(exe));
-    const existed = !!(app && app.installed);
-    if (app) { app.installed = true; app.pinned = !app.custom; }
-    else { app = { id: exe, name, exes: [exe], custom: true, pinned: false, installed: true, modified: false, icon: null, actions: [] }; mockActions.apps.push(app); }
-    handleHostMessage({ type: "actions", actions: mockActions });
-    setTimeout(() => handleHostMessage({ type: "actionAppAdded", id: app.id, existed }), 150);
   } else if (msg.cmd === "actionListApps") {
     handleHostMessage({ type: "actionApps", open: [
       { title: "Cyberpunk 2077", exe: "cyberpunk2077", listed: false },

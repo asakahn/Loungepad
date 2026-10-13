@@ -153,6 +153,10 @@ public class UiBridge
         {
             if (_achievementsOpenId == id && _achievements.Get(id) is { } set) PushAchievements(set, null);
         });
+
+        // The shortcuts' icons are found off the UI thread after each change; the page gets the
+        // whole list again once they are in.
+        _window.Shortcuts.LooksChanged += () => _window.Dispatcher.BeginInvoke(() => PushShortcuts(resolve: false));
     }
 
     /// <summary>The window is closing: stop the sampling loop and any pass in flight.</summary>
@@ -195,6 +199,7 @@ public class UiBridge
         {
             case "ready":
                 PushState();
+                PushShortcuts();
                 _window.PushPadState();
                 // The notes say which version this is; the toast is for a build that has none.
                 if (!PushWhatsNew() && App.UpdatedFrom is not null)
@@ -219,28 +224,7 @@ public class UiBridge
             {
                 var id = msg["id"]?.GetValue<string>();
                 var game = id is null ? null : _library.Find(id);
-                if (game is null) break;
-                if (!game.Installed || (game.ExePath is not null && !File.Exists(game.ExePath) && game.Platform is "GOG" or "Manual"))
-                {
-                    Push(new { type = "toast", message = $"{game.Title} is not installed" });
-                    break;
-                }
-                // Everything that can be wrong with an emulated launch is known before anything
-                // starts -- no emulator, its exe gone, the ROM gone, a core never chosen -- and
-                // each is something the person can fix, so it is said here rather than logged.
-                if (game.Emulated && _launcher.ResolveEmulated(game, out var problem) is null)
-                {
-                    Push(new { type = "toast", message = problem ?? "This game cannot be started" });
-                    break;
-                }
-                if (_launcher.GameRunning)
-                {
-                    // The UI has already asked whether to swap; `replace` is that answer.
-                    if (msg["replace"]?.GetValue<bool>() == true) _ = SwapRunningGame(game);
-                    else Push(new { type = "toast", message = "A game is already running" });
-                    break;
-                }
-                _launcher.Launch(game);
+                if (game is not null) LaunchGame(game, msg["replace"]?.GetValue<bool>() == true);
                 break;
             }
 
@@ -542,14 +526,75 @@ public class UiBridge
                 break;
             }
 
-            case "shortcut":
-                if (msg["id"]?.GetValue<string>() is { } sid)
-                {
-                    // Sleep sits in the shortcuts list but is rest mode's: the game is frozen and
-                    // the pad parked first, so the machine comes back the way it went.
-                    if (sid == "sleepPc") { _ = _window.Rest.Sleep("the Power Wheel"); break; }
-                    _ = _window.OpenShortcut(sid);
-                }
+            // ---- the Power Wheel's shortcuts (see ShortcutService) ----
+
+            // A pick from the wheel. The page has taken its menus down and asked anything that
+            // needed asking; `confirmed` says so.
+            case "shortcutRun":
+                RunShortcut(msg["id"]?.GetValue<string>(), msg["confirmed"]?.GetValue<bool>() == true, fromWheel: true);
+                break;
+
+            case "shortcutSave":
+            {
+                var item = msg["item"].Deserialize<ShortcutDef>(JsonOpts);
+                var index = msg["index"]?.GetValue<int>();
+                if (item is null || _window.Shortcuts.Save(msg["tabId"]?.GetValue<string>() ?? "", item, index) is null)
+                    PushToast("That shortcut could not be saved");
+                PushShortcuts();
+                break;
+            }
+
+            case "shortcutRemove":
+                _window.Shortcuts.Remove(msg["id"]?.GetValue<string>() ?? "");
+                PushShortcuts();
+                break;
+
+            case "shortcutMove":
+                if (!_window.Shortcuts.Move(msg["id"]?.GetValue<string>() ?? "", msg["tabId"]?.GetValue<string>() ?? "", msg["index"]?.GetValue<int>() ?? 0))
+                    PushToast("That tab is full");
+                PushShortcuts();
+                break;
+
+            case "shortcutTabAdd":
+                if (_window.Shortcuts.AddTab(msg["id"]?.GetValue<string>(), msg["name"]?.GetValue<string>() ?? "", msg["index"]?.GetValue<int>()) is null)
+                    PushToast($"A wheel holds up to {ShortcutService.MaxTabs} tabs");
+                PushShortcuts();
+                break;
+
+            case "shortcutTabRename":
+                _window.Shortcuts.RenameTab(msg["id"]?.GetValue<string>() ?? "", msg["name"]?.GetValue<string>() ?? "");
+                PushShortcuts();
+                break;
+
+            case "shortcutTabMove":
+                _window.Shortcuts.MoveTab(msg["id"]?.GetValue<string>() ?? "", msg["index"]?.GetValue<int>() ?? 0);
+                PushShortcuts();
+                break;
+
+            case "shortcutTabRemove":
+                if (!_window.Shortcuts.RemoveTab(msg["id"]?.GetValue<string>() ?? "")) PushToast("The last tab stays: shortcuts need a tab to go on");
+                PushShortcuts();
+                break;
+
+            case "shortcutsReset":
+                _window.Shortcuts.Reset();
+                PushShortcuts();
+                break;
+
+            // The Start menu's apps for the picker, then their icons. A few hundred of each, so
+            // both are found off the UI thread and the icons arrive as a second message.
+            case "shortcutApps":
+                _ = ListStartAppsAsync();
+                break;
+
+            // A program, file, folder or script chosen with Windows' own dialog.
+            case "shortcutBrowse":
+                BrowseForShortcut(msg["kind"]?.GetValue<string>() ?? "");
+                break;
+
+            // A picture or an icon from the PC for a shortcut, chosen with Windows' own dialog.
+            case "shortcutIconPick":
+                PickShortcutIcon(msg["id"]?.GetValue<string>() ?? "");
                 break;
 
             // ---- rest mode (see RestService) ----
@@ -638,14 +683,48 @@ public class UiBridge
                 var appId = msg["appId"]?.GetValue<string>() ?? "";
                 var incoming = msg["action"].Deserialize<ActionDef>(JsonOpts);
                 if (incoming is null) break;
-                var stored = _window.Actions.Update(appId, incoming);
-                if (stored is null) Push(new { type = "toast", message = "That action could not be saved" });
+                var stored = _window.Actions.Update(appId, incoming, msg["tabId"]?.GetValue<string>(), msg["index"]?.GetValue<int>());
+                if (stored is null) PushToast("That action could not be saved: is the tab full?");
                 PushActions();
                 break;
             }
 
             case "actionRemove":
                 _window.Actions.Remove(msg["appId"]?.GetValue<string>() ?? "", msg["actionId"]?.GetValue<string>() ?? "");
+                PushActions();
+                break;
+
+            case "actionRestore":
+                _window.Actions.Restore(msg["appId"]?.GetValue<string>() ?? "", msg["actionId"]?.GetValue<string>() ?? "");
+                PushActions();
+                break;
+
+            case "actionMove":
+                if (!_window.Actions.Move(msg["appId"]?.GetValue<string>() ?? "", msg["actionId"]?.GetValue<string>() ?? "",
+                        msg["tabId"]?.GetValue<string>() ?? "", msg["index"]?.GetValue<int>() ?? 0))
+                    PushToast("That tab is full");
+                PushActions();
+                break;
+
+            case "actionTabAdd":
+                if (_window.Actions.AddTab(msg["appId"]?.GetValue<string>() ?? "", msg["id"]?.GetValue<string>(), msg["name"]?.GetValue<string>() ?? "", msg["index"]?.GetValue<int>()) is null)
+                    PushToast($"An app holds up to {ActionPacks.MaxTabs} tabs");
+                PushActions();
+                break;
+
+            case "actionTabRename":
+                _window.Actions.RenameTab(msg["appId"]?.GetValue<string>() ?? "", msg["id"]?.GetValue<string>() ?? "", msg["name"]?.GetValue<string>() ?? "");
+                PushActions();
+                break;
+
+            case "actionTabMove":
+                _window.Actions.MoveTab(msg["appId"]?.GetValue<string>() ?? "", msg["id"]?.GetValue<string>() ?? "", msg["index"]?.GetValue<int>() ?? 0);
+                PushActions();
+                break;
+
+            case "actionTabRemove":
+                if (!_window.Actions.RemoveTab(msg["appId"]?.GetValue<string>() ?? "", msg["id"]?.GetValue<string>() ?? ""))
+                    PushToast("The last tab stays: actions need a tab to go on");
                 PushActions();
                 break;
 
@@ -3042,23 +3121,231 @@ public class UiBridge
     private object ActionsPayload(bool icons)
     {
         var acts = _window.Actions;
+        static object Wire(ActionDef x) => new
+        {
+            id = x.Id, name = x.Name, keys = x.Keys, button = x.Button, desc = x.Desc, custom = x.Custom, danger = x.Danger, edited = x.Edited,
+        };
         return new
         {
+            maxItems = ActionPacks.MaxItems, maxTabs = ActionPacks.MaxTabs,
             apps = acts.Apps.Select(a => new
             {
                 id = a.Id, name = a.Name, exes = a.Exes, custom = a.Custom, pinned = a.Pinned,
                 installed = acts.Installed(a), modified = acts.Modified(a.Id), icon = icons ? acts.Icon(a) : null,
-                actions = a.Actions.Select(x => new
-                {
-                    id = x.Id, name = x.Name, keys = x.Keys, button = x.Button,
-                    hidden = x.Hidden, custom = x.Custom, danger = x.Danger,
-                }),
+                tabs = a.Tabs.Select(t => new { id = t.Id, name = t.Name, items = t.Actions.Select(Wire) }),
+                // The pack's actions taken off the wheel: "Add an action" offers them first.
+                spare = a.Spare.Select(Wire),
             }),
         };
     }
 
     public void PushActionCaptured(string? combo) => Push(new { type = "actionCaptured", combo });
     public void PushActionCaptureRejected(string button) => Push(new { type = "actionCaptureRejected", button });
+
+    // ---- the Power Wheel's shortcuts ----
+
+    /// <summary>Every tab and shortcut, with the icons found so far, the built-ins the pickers
+    /// offer and the folders worth a shortcut. Its own message, never part of a state push: an edit
+    /// must not rebuild the library under it. Icons not looked up yet are found next.</summary>
+    public void PushShortcuts(bool resolve = true)
+    {
+        Push(new { type = "shortcuts", shortcuts = _window.Shortcuts.Payload() });
+        if (resolve) _window.Shortcuts.ResolveLooks();
+    }
+
+    /// <summary>A shortcut's button, pressed on the desktop. Anything that asks first -- the power
+    /// actions, a command that says so, a game while another is running -- brings Loungepad back
+    /// to ask it, since a question nobody can see cannot be answered.</summary>
+    public void RunShortcutFromButton(string id) => RunShortcut(id, confirmed: false, fromWheel: false);
+
+    private void RunShortcut(string? id, bool confirmed, bool fromWheel)
+    {
+        var d = _window.Shortcuts.Find(id);
+        if (d is null)
+        {
+            if (_window.OverlayActive) _window.CloseOverlay(true);
+            PushToast("That shortcut is gone");
+            return;
+        }
+
+        if (d.Kind == ShortcutKinds.Game)
+        {
+            var game = _library.Find(d.Target);
+            if (game is null)
+            {
+                if (_window.OverlayActive) _window.CloseOverlay(true);
+                PushToast("That game is no longer in the library");
+                return;
+            }
+            if (_launcher.GameRunning && _launcher.RunningGameId == game.Id)
+            {
+                // Already playing it: back to it, thawed if it was paused, as Resume does.
+                _launcher.Resume();
+                if (_window.OverlayActive) _window.CloseOverlay(false);
+                if (_launcher.FindGameWindow() is var hwnd && hwnd != IntPtr.Zero) WindowService.ForceForeground(hwnd);
+                return;
+            }
+            if (_launcher.GameRunning && !confirmed) { AskAboutShortcut(d); return; }
+            if (_window.OverlayActive) _window.CloseOverlay(false);
+            LaunchGame(game, replace: confirmed);
+            return;
+        }
+
+        if (ShortcutService.NeedsConfirm(d) && !confirmed)
+        {
+            AskAboutShortcut(d);
+            return;
+        }
+        Log.Info($"Shortcut: {d.Name} from {(fromWheel ? "the Power Wheel" : "its button")}");
+        _ = _window.OpenShortcut(d);
+    }
+
+    /// <summary>Loungepad on screen with the shortcut's question on it: the page asks, and an answer
+    /// of yes comes back as a shortcutRun with confirmed set.</summary>
+    private void AskAboutShortcut(ShortcutDef d)
+    {
+        if (!_window.OverlayActive) _window.GoHome();
+        Push(new { type = "shortcutAsk", id = d.Id });
+    }
+
+    /// <summary>
+    /// Start a library game: the library's Play, and a game on the Power Wheel. <paramref
+    /// name="replace"/> is the page's answer to "close the running game?".
+    /// </summary>
+    private void LaunchGame(Game game, bool replace)
+    {
+        if (!game.Installed || (game.ExePath is not null && !File.Exists(game.ExePath) && game.Platform is "GOG" or "Manual"))
+        {
+            Push(new { type = "toast", message = $"{game.Title} is not installed" });
+            return;
+        }
+        // Everything that can be wrong with an emulated launch is known before anything
+        // starts -- no emulator, its exe gone, the ROM gone, a core never chosen -- and
+        // each is something the person can fix, so it is said here rather than logged.
+        if (game.Emulated && _launcher.ResolveEmulated(game, out var problem) is null)
+        {
+            Push(new { type = "toast", message = problem ?? "This game cannot be started" });
+            return;
+        }
+        if (_launcher.GameRunning)
+        {
+            // The UI has already asked whether to swap; `replace` is that answer.
+            if (replace) _ = SwapRunningGame(game);
+            else Push(new { type = "toast", message = "A game is already running" });
+            return;
+        }
+        _launcher.Launch(game);
+    }
+
+    private async Task ListStartAppsAsync()
+    {
+        List<ShellApps.StartApp> apps;
+        try { apps = await ShortcutService.ListAppsAsync(); }
+        catch (Exception ex)
+        {
+            Log.Info($"Shortcuts: the Start menu could not be read: {ex.Message}");
+            _window.Dispatcher.Invoke(() => Push(new { type = "shortcutApps", apps = Array.Empty<object>(), error = "The Start menu could not be read" }));
+            return;
+        }
+        _window.Dispatcher.Invoke(() => Push(new
+        {
+            type = "shortcutApps",
+            apps = apps.Select(a => new { id = a.Id, name = a.Name, exe = a.Exe, packaged = a.Packaged }),
+        }));
+        // Forty at a time, so the first screen of the list fills in while the rest are found.
+        foreach (var chunk in apps.Select(a => a.Id).Chunk(40))
+        {
+            var icons = await ShortcutService.AppIconsAsync(chunk);
+            if (icons.Count > 0) _window.Dispatcher.Invoke(() => Push(new { type = "shortcutAppIcons", icons }));
+        }
+    }
+
+    /// <summary>Windows' own dialog for the picker. The answer is a shortcutPicked message with
+    /// the path and a name to start from, or a null path when the dialog was cancelled.</summary>
+    private void BrowseForShortcut(string kind)
+    {
+        string? path = null, name = null;
+        try
+        {
+            if (kind == "folder")
+            {
+                var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "Choose the folder to open from the Power Wheel" };
+                if (ShowDialog(dlg)) { path = dlg.FolderName; name = Path.GetFileName(path.TrimEnd('\\')) is { Length: > 0 } n ? n : path; }
+            }
+            else
+            {
+                var dlg = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = kind switch
+                    {
+                        "program" => "Choose the program to open from the Power Wheel",
+                        "script" => "Choose the script to run from the Power Wheel",
+                        _ => "Choose the file to open from the Power Wheel",
+                    },
+                    Filter = kind switch
+                    {
+                        "program" => "Programs (*.exe)|*.exe|All files (*.*)|*.*",
+                        "script" => "Scripts (*.bat;*.cmd;*.ps1)|*.bat;*.cmd;*.ps1|Programs (*.exe)|*.exe|All files (*.*)|*.*",
+                        _ => "All files (*.*)|*.*",
+                    },
+                };
+                if (ShowDialog(dlg))
+                {
+                    path = dlg.FileName;
+                    name = kind == "program" ? ProgramName(path) : Path.GetFileNameWithoutExtension(path);
+                }
+            }
+        }
+        catch (Exception ex) { Log.Info($"Shortcuts: the dialog failed: {ex.Message}"); }
+        Push(new { type = "shortcutPicked", kind, path, name });
+    }
+
+    /// <summary>
+    /// A shortcut's own picture: a photo, a drawing, an .ico, or a program whose icon will do,
+    /// made into the small PNG the wheel draws (ShortcutIcons). The page hears shortcutIconPicked
+    /// either way, so the edit sheet it stepped aside from comes back.
+    /// </summary>
+    private void PickShortcutIcon(string id)
+    {
+        bool ok = false;
+        string? error = null;
+        if (_window.Shortcuts.Find(id) is not null)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Choose a picture or an icon for the shortcut",
+                Filter = "Pictures and icons (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp;*.ico;*.exe)|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp;*.ico;*.exe|All files (*.*)|*.*",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+            };
+            if (ShowDialog(dlg))
+            {
+                try
+                {
+                    if (ShortcutIcons.FromFile(dlg.FileName) is { } png) ok = _window.Shortcuts.SetIcon(id, png);
+                    else error = "That file is not a picture Loungepad can read";
+                }
+                catch (Exception ex)
+                {
+                    Log.Info($"Shortcuts: {dlg.FileName} could not be used as an icon: {ex.Message}");
+                    error = "That picture could not be used";
+                }
+            }
+        }
+        if (ok) PushShortcuts();
+        Push(new { type = "shortcutIconPicked", id, ok, error });
+    }
+
+    /// <summary>What a program calls itself (its file description), else its file name.</summary>
+    private static string ProgramName(string path)
+    {
+        try
+        {
+            var desc = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileDescription?.Trim();
+            if (!string.IsNullOrEmpty(desc) && desc.Length <= 40) return desc;
+        }
+        catch { }
+        return Path.GetFileNameWithoutExtension(path);
+    }
 
     /// <summary>Look for the packs' programs and their icons, off the UI thread, then tell the page.</summary>
     private void DetectApps()

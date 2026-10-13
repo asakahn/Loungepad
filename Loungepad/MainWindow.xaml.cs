@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly GameLaunchService _launcher;
     private readonly GamepadService _gamepad;
     private readonly ActionService _actions;
+    private readonly ShortcutService _shortcuts = new();
     private readonly HidGamepadReader _hid = new();
     private readonly SteamForeground _steam = new();
     private readonly ServiceInputClient _serviceInput = new();
@@ -104,6 +105,12 @@ public partial class MainWindow : Window
         _actions = new ActionService(() => _library.Emulators);
         _actions.Load();
         _gamepad.Actions = _actions;
+        // The Power Wheel's shortcuts: their buttons go to the pad loop with the actions' own, and
+        // follow every edit; a press comes back here to be opened like a pick from the wheel.
+        _shortcuts.Load();
+        _actions.SetShortcutBindings(_shortcuts.Bindings());
+        _shortcuts.Changed += () => _actions.SetShortcutBindings(_shortcuts.Bindings());
+        _actions.ShortcutFired += id => Dispatcher.BeginInvoke(() => _bridge?.RunShortcutFromButton(id));
         _gamepad.Captured += combo => Dispatcher.BeginInvoke(() => _bridge?.PushActionCaptured(combo));
         _gamepad.CaptureRejected += why => Dispatcher.BeginInvoke(() => _bridge?.PushActionCaptureRejected(why));
 
@@ -1014,47 +1021,59 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// A Power Wheel shortcut: the program started, Loungepad out of the way, and the program's
-    /// window in front -- on the TV, when one is set.
+    /// A Power Wheel shortcut, picked on the wheel or pressed on its button: started, Loungepad out
+    /// of the way, and the window it opened in front -- on the TV, when one is set. Games are the
+    /// bridge's (they go through the library's launch); everything else comes here, already
+    /// confirmed if it needed to be.
     ///
-    /// Opened over Loungepad itself, the close above leaves the launcher where it was: topmost on
-    /// the TV with the new window drawn underneath it, and KeepFocus taking the foreground back
+    /// Opened over Loungepad itself, closing the overlay leaves the launcher where it was: topmost
+    /// on the TV with the new window drawn underneath it, and KeepFocus taking the foreground back
     /// 350 ms later, so the mixer opened behind the launcher and had to be switched to by hand (a
-    /// handheld user's report, Oct 8 2026). It parks now, as it does when a game starts, and for
-    /// the same reason as there the program is handed the foreground twice: allowed to take it
-    /// while the launcher is still the foreground process -- once it is hidden, Windows refuses a
-    /// program the foreground for having been started by it -- and brought forward through the
-    /// input-queue join once its window is up.
+    /// handheld user's report, Oct 8 2026). It parks, as it does when a game starts, and for the
+    /// same reason as there the program is handed the foreground twice: allowed to take it while
+    /// the launcher is still the foreground process -- once it is hidden, Windows refuses a program
+    /// the foreground for having been started by it -- and brought forward through the input-queue
+    /// join once its window is up. What is started through the shell has no process to name, so
+    /// every process is allowed for that moment instead.
     /// </summary>
-    public async Task OpenShortcut(string id)
+    public async Task OpenShortcut(ShortcutDef d)
     {
-        var before = WindowService.VisibleWindows();
-        if (!_windows.RunShortcut(id, out var started))
+        if (d.Kind == ShortcutKinds.Builtin && d.Target is "rest" or "sleepPc")
         {
-            CloseOverlay(false);
-            _bridge?.PushToast("That shortcut could not be opened");
+            // Rest mode's own, which takes the menu down itself (PrepareForRest).
+            if (d.Target == "rest") _rest.Rest("a shortcut");
+            else _ = _rest.Sleep("a shortcut");
             return;
         }
-        using (started)
+        var before = WindowService.VisibleWindows();
+        if (_overlayActive || NativeMethods.GetForegroundWindow() == _hwnd)
+            NativeMethods.AllowSetForegroundWindow(NativeMethods.ASFW_ANY);
+        var started = await _shortcuts.StartAsync(d);
+        if (!started.Ok)
         {
-            try { if (started is not null) NativeMethods.AllowSetForegroundWindow((uint)started.Id); }
-            catch (Exception ex) { Log.Info($"Radial: {id}: AllowSetForegroundWindow failed: {ex.Message}"); }
+            if (_overlayActive) CloseOverlay(false);
+            _bridge?.PushToast(started.Error ?? "That shortcut could not be opened");
+            return;
         }
-        CloseOverlay(false);
-        if (!WindowService.OpensWindow(id)) return;
+        if (started.Pid != 0) NativeMethods.AllowSetForegroundWindow(started.Pid);
+        if (_overlayActive) CloseOverlay(false);
+        Log.Info($"Shortcut: {d.Name} ({d.Kind}) started");
+        if (started.Window is not { } match) return;
         Park();
 
-        var hwnd = await _windows.WaitForShortcutWindow(id, before, TimeSpan.FromSeconds(8), () => _parked);
+        var hwnd = await _windows.WaitForShortcutWindow(match, before, TimeSpan.FromSeconds(8), () => _parked);
         if (!_parked) return;   // brought back meanwhile: the launcher is what was asked for now
         if (hwnd == IntPtr.Zero)
         {
-            Log.Info($"Radial: {id} put up no window to bring forward");
+            Log.Info($"Shortcut: {d.Name} put up no window to bring forward");
             return;
         }
         if (_settings.Settings.TvDeviceName is { } tv && _windows.DisplayOf(hwnd) != tv) _windows.MoveToDisplay(hwnd, tv);
         if (NativeMethods.GetForegroundWindow() != hwnd) WindowService.ForceForeground(hwnd);
-        Log.Info($"Radial: {id} brought forward" + (NativeMethods.GetForegroundWindow() == hwnd ? "" : ", but Windows kept the foreground elsewhere"));
+        Log.Info($"Shortcut: {d.Name} brought forward" + (NativeMethods.GetForegroundWindow() == hwnd ? "" : ", but Windows kept the foreground elsewhere"));
     }
+
+    internal ShortcutService Shortcuts => _shortcuts;
 
     /// <summary>
     /// The Power Wheel's Switch window: that window on the TV and in front, and Loungepad out of its

@@ -21,7 +21,8 @@ namespace Loungepad.Services;
 internal class ActionService
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
-    private static readonly string FilePath = Path.Combine(Paths.DataDir, "actions.json");
+    private const int MaxTabName = 24;
+    private readonly string _path;
 
     /// <summary>The file: only what differs from the packs, plus the user's own apps.</summary>
     private ActionsFileData _file = new();
@@ -36,9 +37,24 @@ internal class ActionService
     /// whatever is in front.</summary>
     public Action<string> SendKeys = keys => ShortcutKeys.Send(keys);
 
-    public ActionService(Func<IReadOnlyList<EmulatorDef>> emulators)
+    /// <param name="path">actions.json; another file for a harness, so it never touches the real one.</param>
+    public ActionService(Func<IReadOnlyList<EmulatorDef>> emulators, string? path = null)
     {
         _emulators = emulators;
+        _path = path ?? Path.Combine(Paths.DataDir, "actions.json");
+    }
+
+    /// <summary>The Power Wheel shortcuts that have a button (ShortcutService.Bindings). They answer
+    /// in every app, as Everywhere's actions do, and rank just under them.</summary>
+    private IReadOnlyList<(string Combo, string Id, string Name)> _shortcutBindings = Array.Empty<(string, string, string)>();
+
+    /// <summary>A shortcut's button was pressed, with its id. Raised on the pad thread.</summary>
+    public event Action<string>? ShortcutFired;
+
+    public void SetShortcutBindings(IEnumerable<(string Combo, string Id, string Name)> bindings)
+    {
+        _shortcutBindings = bindings.ToList();
+        Rebuild();
     }
 
     // ---- the file ----
@@ -47,8 +63,8 @@ internal class ActionService
     {
         try
         {
-            if (File.Exists(FilePath))
-                _file = JsonSerializer.Deserialize<ActionsFileData>(File.ReadAllText(FilePath)) ?? new();
+            if (File.Exists(_path))
+                _file = JsonSerializer.Deserialize<ActionsFileData>(File.ReadAllText(_path)) ?? new();
         }
         catch (Exception ex)
         {
@@ -56,20 +72,53 @@ internal class ActionService
             _file = new();
         }
         _file.Apps ??= new();
+        _file.Apps.RemoveAll(a => a is null || string.IsNullOrWhiteSpace(a.Id));
+        bool migrated = false;
         foreach (var app in _file.Apps)
         {
-            app.Actions ??= new();
             app.Exes ??= new();
+            app.Actions ??= new();
+            app.Removed ??= new();
+            app.Actions.RemoveAll(a => a is null || string.IsNullOrWhiteSpace(a.Id));
+            migrated |= Migrate(app);
         }
+        if (_file.Version < 2) { _file.Version = 2; migrated = true; }
         Rebuild();
+        if (migrated) Save();
+    }
+
+    /// <summary>
+    /// Version 1 could keep an action off the wheel with a flag. There is no such thing any more
+    /// (the user's call, Oct 13 2026: tabs do the job): a pack's action that was kept off is taken
+    /// off instead, so it is offered when an action is added, unless it has a button, which has to
+    /// go on working and so stays on the wheel. The user's own actions all stay on.
+    /// </summary>
+    private static bool Migrate(ActionAppFile app)
+    {
+        bool changed = false;
+        var pack = ActionPacks.Find(app.Id);
+        foreach (var a in app.Actions.ToList())
+        {
+            if (a.Hidden is null) continue;
+            changed = true;
+            bool hidden = a.Hidden == true;
+            a.Hidden = null;
+            if (!hidden || !string.IsNullOrEmpty(a.Button) || pack?.Actions.Any(d => d.Id == a.Id) != true) continue;
+            app.Actions.Remove(a);
+            if (!app.Removed.Contains(a.Id)) app.Removed.Add(a.Id);
+        }
+        return changed;
     }
 
     private void Save()
     {
         try
         {
-            Paths.EnsureCreated();
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(_file, JsonOpts));
+            var dir = Path.GetDirectoryName(Path.GetFullPath(_path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var tmp = _path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(_file, JsonOpts));
+            File.Move(tmp, _path, overwrite: true);
         }
         catch (Exception ex) { Log.Info($"Actions save failed: {ex.Message}"); }
     }
@@ -82,8 +131,8 @@ internal class ActionService
 
     public ActionApp? Find(string id) => _snapshot.Apps.FirstOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>A pack the user has not touched has no entry in the file.</summary>
-    public bool Modified(string id) => _file.Apps.Any(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    /// <summary>A pack the user has not touched has nothing in the file but, at most, its pin.</summary>
+    public bool Modified(string id) => Entry(id) is { Untouched: false };
 
     /// <summary>Shown in Settings: Everywhere always, a pack when its program was found or the user
     /// added it by hand, and every custom app.</summary>
@@ -98,115 +147,306 @@ internal class ActionService
     /// <summary>The app an exe name belongs to, or null. Everywhere is never the answer here.</summary>
     public ActionApp? ForExe(string? exe) => _snapshot.ForExe(exe);
 
+    private ActionAppFile? Entry(string id) =>
+        _file.Apps.FirstOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
     private void Rebuild()
     {
         var list = new List<ActionApp>();
-        foreach (var pack in ActionPacks.All)
-        {
-            var mine = _file.Apps.FirstOrDefault(a => a.Id.Equals(pack.Id, StringComparison.OrdinalIgnoreCase));
-            list.Add(mine is null ? pack.Clone() : Merge(pack, mine));
-        }
+        foreach (var pack in ActionPacks.All) list.Add(Resolve(pack, Entry(pack.Id)));
         foreach (var mine in _file.Apps)
-        {
-            if (ActionPacks.Find(mine.Id) is not null) continue;
-            var app = mine.Clone();
-            app.Custom = true;
-            foreach (var a in app.Actions) a.Custom = true;
-            list.Add(app);
-        }
-        _snapshot = new Snapshot(list);
+            if (ActionPacks.Find(mine.Id) is null) list.Add(Resolve(null, mine));
+        _snapshot = new Snapshot(list, _shortcutBindings);
     }
 
-    /// <summary>The pack's list in the pack's order, each action replaced by the file's copy when
-    /// there is one; the file's own actions after. A file entry for an action the pack no longer
-    /// has is kept, as a custom one, rather than silently dropped.</summary>
-    private static ActionApp Merge(ActionApp pack, ActionApp mine)
+    /// <summary>
+    /// A pack with the file's difference applied, or a custom app from the file alone. The actions
+    /// are the pack's, each replaced by the file's copy when there is one, then the user's own; the
+    /// tabs are the user's arrangement when there is one, else the pack's. An action on no tab and
+    /// not taken off -- a default newer than the arrangement, or the user's own from a file older
+    /// than tabs -- goes on the tab the pack has it on, else the last tab with room, else a new one.
+    /// </summary>
+    internal static ActionApp Resolve(ActionApp? pack, ActionAppFile? mine)
     {
-        var app = pack.Clone();
-        app.Pinned = mine.Pinned;
-        if (!string.IsNullOrEmpty(mine.Path)) app.Path = mine.Path;
-        var merged = new List<ActionDef>();
-        foreach (var d in app.Actions)
+        var app = pack is not null
+            ? new ActionApp { Id = pack.Id, Name = pack.Name, Exes = new List<string>(pack.Exes), Pinned = mine?.Pinned == true }
+            : new ActionApp { Id = mine!.Id, Name = mine.Name, Exes = new List<string>(mine.Exes), Custom = true };
+        if (!string.IsNullOrEmpty(mine?.Path)) app.Path = mine.Path;
+
+        var order = new List<string>();
+        var actions = new Dictionary<string, ActionDef>();
+        var packTab = new Dictionary<string, string>();
+        foreach (var tab in pack?.Tabs ?? new())
+            foreach (var d in tab.Actions)
+            {
+                var m = mine?.Actions.FirstOrDefault(x => x.Id == d.Id);
+                var c = (m ?? d).Clone();
+                c.Custom = false;
+                c.Danger = d.Danger;
+                if (string.IsNullOrEmpty(c.Desc)) c.Desc = d.Desc;
+                c.Edited = m is not null && !SameAs(m, d);
+                packTab[d.Id] = tab.Id;
+                actions[d.Id] = c;
+                order.Add(d.Id);
+            }
+        foreach (var m in mine?.Actions ?? new())
         {
-            var m = mine.Actions.FirstOrDefault(x => x.Id == d.Id);
-            if (m is null) { merged.Add(d); continue; }
-            var c = m.Clone();
-            c.Custom = false;
-            c.Danger = d.Danger;
-            merged.Add(c);
-        }
-        foreach (var m in mine.Actions)
-        {
-            if (app.Actions.Any(d => d.Id == m.Id)) continue;
+            if (actions.ContainsKey(m.Id)) continue;
             var c = m.Clone();
             c.Custom = true;
-            merged.Add(c);
+            c.Edited = false;
+            actions[m.Id] = c;
+            order.Add(m.Id);
         }
-        app.Actions = merged;
+        var removed = new HashSet<string>((mine?.Removed ?? new()).Where(packTab.ContainsKey));
+
+        var layout = mine?.Tabs ?? Layout(pack?.Tabs ?? new());
+        var placed = new HashSet<string>();
+        var tabIds = new HashSet<string>();
+        foreach (var lt in layout.Take(ActionPacks.MaxTabs))
+        {
+            if (lt is null || !tabIds.Add(lt.Id ?? "")) continue;
+            var tab = new ActionTab { Id = lt.Id ?? "", Name = string.IsNullOrWhiteSpace(lt.Name) ? "Tab " + (app.Tabs.Count + 1) : lt.Name };
+            foreach (var id in lt.Items ?? new())
+                if (tab.Actions.Count < ActionPacks.MaxItems && !removed.Contains(id) && actions.TryGetValue(id, out var a) && placed.Add(id))
+                    tab.Actions.Add(a);
+            app.Tabs.Add(tab);
+        }
+        foreach (var id in order)
+        {
+            if (placed.Contains(id) || removed.Contains(id)) continue;
+            var home = packTab.TryGetValue(id, out var pt) ? app.Tabs.FirstOrDefault(t => t.Id == pt && t.Actions.Count < ActionPacks.MaxItems) : null;
+            home ??= app.Tabs.LastOrDefault(t => t.Actions.Count < ActionPacks.MaxItems);
+            if (home is null)
+            {
+                home = new ActionTab { Id = NewTabId(app.Tabs.Select(t => t.Id)), Name = app.Tabs.Count == 0 ? "Actions" : "More" };
+                app.Tabs.Add(home);
+            }
+            home.Actions.Add(actions[id]);
+            placed.Add(id);
+        }
+        // Always a tab to add to: a custom app starts with nothing on it.
+        if (app.Tabs.Count == 0) app.Tabs.Add(new ActionTab { Id = "main", Name = "Actions" });
+        app.Spare = order.Where(removed.Contains).Select(id => actions[id]).ToList();
         return app;
     }
 
+    private static List<ActionTabLayout> Layout(IEnumerable<ActionTab> tabs) =>
+        tabs.Select(t => new ActionTabLayout { Id = t.Id, Name = t.Name, Items = t.Actions.Select(a => a.Id).ToList() }).ToList();
+
+    /// <summary>Whether a copy of a pack's action (a) says what the pack's (b) does. A copy with no
+    /// description has the pack's.</summary>
+    private static bool SameAs(ActionDef a, ActionDef b) =>
+        a.Name == b.Name && a.Keys == b.Keys && (a.Button ?? "") == (b.Button ?? "")
+        && (string.IsNullOrEmpty(a.Desc) || a.Desc == b.Desc);
+
     // ---- edits, from the bridge ----
 
-    private ActionApp FileEntry(string id)
+    private ActionAppFile FileEntry(string id)
     {
-        var e = _file.Apps.FirstOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        var e = Entry(id);
         if (e is not null) return e;
         var pack = ActionPacks.Find(id) ?? throw new InvalidOperationException($"No such app: {id}");
-        e = new ActionApp { Id = pack.Id, Name = pack.Name, Exes = new List<string>(pack.Exes) };
+        e = new ActionAppFile { Id = pack.Id, Name = pack.Name, Exes = new List<string>(pack.Exes) };
         _file.Apps.Add(e);
         return e;
     }
 
-    /// <summary>Add or replace one action. Returns what was stored, or null when refused.</summary>
-    public ActionDef? Update(string appId, ActionDef incoming)
+    /// <summary>The app's entry with its tabs written out exactly as they are drawn now: an edit
+    /// that arranges anything starts from what the user is looking at, new defaults included.</summary>
+    private ActionAppFile Arrange(ActionApp app)
+    {
+        var e = FileEntry(app.Id);
+        e.Tabs = Layout(app.Tabs);
+        return e;
+    }
+
+    /// <summary>A pack's entry that has gone back to the pack forgets its arrangement (so a better
+    /// one in a later build reaches it), and one with nothing left in it goes.</summary>
+    private void Tidy(ActionAppFile e)
+    {
+        var pack = ActionPacks.Find(e.Id);
+        if (pack is null) return;
+        if (e.Tabs is not null && e.Removed.Count == 0 && !e.Actions.Any(a => pack.Actions.All(d => d.Id != a.Id))
+            && SameLayout(e.Tabs, Layout(pack.Tabs)))
+            e.Tabs = null;
+        if (e.Untouched && !e.Pinned && string.IsNullOrEmpty(e.Path)) _file.Apps.Remove(e);
+    }
+
+    private static bool SameLayout(List<ActionTabLayout> a, List<ActionTabLayout> b) =>
+        a.Count == b.Count && a.Zip(b).All(p => p.First.Id == p.Second.Id && p.First.Name == p.Second.Name && p.First.Items.SequenceEqual(p.Second.Items));
+
+    private void Commit(ActionAppFile? e = null)
+    {
+        if (e is not null) Tidy(e);
+        Save();
+        Rebuild();
+    }
+
+    private static bool ValidId(string id) =>
+        id.Length is > 0 and <= 40 && id.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+
+    private static string NewTabId(IEnumerable<string> taken)
+    {
+        var have = new HashSet<string>(taken);
+        for (int n = 1; ; n++)
+        {
+            var id = n == 1 ? "more" : "more-" + n;
+            if (!have.Contains(id)) return id;
+        }
+    }
+
+    /// <summary>
+    /// Add or change one action. One not on the wheel -- the user's own, new, or a pack's taken off
+    /// earlier and put back -- goes on <paramref name="tabId"/> at <paramref name="index"/> (the
+    /// last tab, the end, when null). Returns what was stored, or null when refused: no such app, a
+    /// malformed id, or a full tab.
+    /// </summary>
+    public ActionDef? Update(string appId, ActionDef incoming, string? tabId = null, int? index = null)
     {
         var app = Find(appId);
         if (app is null) return null;
         var id = (incoming.Id ?? "").Trim();
-        if (id.Length == 0 || id.Length > 40 || !id.All(c => char.IsLetterOrDigit(c) || c == '-')) return null;
+        if (!ValidId(id)) return null;
         var clean = new ActionDef
         {
             Id = id,
             Name = Truncate((incoming.Name ?? "").Trim(), 48),
             Keys = ShortcutKeys.IsValid(incoming.Keys ?? "") ? Normalize(incoming.Keys!) : "",
             Button = CleanButton(incoming.Button),
-            Hidden = incoming.Hidden,
+            Desc = CleanDesc(incoming.Desc),
         };
         if (clean.Name.Length == 0) clean.Name = clean.Keys.Length > 0 ? clean.Keys : "Action";
 
-        var entry = FileEntry(app.Id);
+        var packDef = ActionPacks.Find(app.Id)?.Actions.FirstOrDefault(a => a.Id == id);
+        // The pack's own words are not kept as a change, so a better sentence in a later build reaches it.
+        if (packDef is not null && clean.Desc == packDef.Desc) clean.Desc = null;
+        ActionAppFile entry;
+        if (app.Actions.Any(a => a.Id == id)) entry = FileEntry(app.Id);
+        else
+        {
+            entry = Arrange(app);
+            var tab = entry.Tabs!.FirstOrDefault(t => t.Id == tabId) ?? entry.Tabs!.LastOrDefault();
+            if (tab is null || tab.Items.Count >= ActionPacks.MaxItems) return null;
+            tab.Items.Insert(Math.Clamp(index ?? tab.Items.Count, 0, tab.Items.Count), id);
+            entry.Removed.Remove(id);
+        }
+        // In place, so the order of a file older than tabs (which places the user's own in this
+        // order) is kept; a pack's action changed back to exactly the pack's is no change at all.
         var i = entry.Actions.FindIndex(a => a.Id == id);
-        if (i >= 0) entry.Actions[i] = clean; else entry.Actions.Add(clean);
-        Save();
-        Rebuild();
+        bool keep = packDef is null || !SameAs(clean, packDef);
+        if (i >= 0 && keep) entry.Actions[i] = clean;
+        else if (i >= 0) entry.Actions.RemoveAt(i);
+        else if (keep) entry.Actions.Add(clean);
+        Commit(entry);
         return clean;
     }
 
-    public bool Remove(string appId, string actionId)
+    /// <summary>A pack's action back to the pack's own name, shortcut and button.</summary>
+    public bool Restore(string appId, string actionId)
     {
-        var app = Find(appId);
-        if (app is null) return false;
-        var packHasIt = ActionPacks.Find(app.Id)?.Actions.Any(a => a.Id == actionId) == true;
-        if (packHasIt) return false;   // a pack's action is hidden or reset, never deleted
-        var entry = _file.Apps.FirstOrDefault(a => a.Id.Equals(app.Id, StringComparison.OrdinalIgnoreCase));
-        if (entry is null) return false;
-        var n = entry.Actions.RemoveAll(a => a.Id == actionId);
-        if (n == 0) return false;
-        Save();
-        Rebuild();
+        if (Entry(appId) is not { } e || ActionPacks.Find(e.Id)?.Actions.Any(a => a.Id == actionId) != true) return false;
+        if (e.Actions.RemoveAll(a => a.Id == actionId) == 0) return false;
+        Commit(e);
         return true;
     }
 
-    /// <summary>Back to the pack: the file's entry goes, and with it every change and every custom
-    /// action. Only for packs; a custom app has nothing to go back to.</summary>
+    /// <summary>Off the wheel. The user's own action is deleted; a pack's is only taken off, and
+    /// is offered again when one is added (its changes are not kept, so it comes back as shipped).</summary>
+    public bool Remove(string appId, string actionId)
+    {
+        var app = Find(appId);
+        if (app is null || !app.Actions.Any(a => a.Id == actionId)) return false;
+        var entry = FileEntry(app.Id);
+        entry.Actions.RemoveAll(a => a.Id == actionId);
+        if (ActionPacks.Find(app.Id)?.Actions.Any(a => a.Id == actionId) == true && !entry.Removed.Contains(actionId))
+            entry.Removed.Add(actionId);
+        if (entry.Tabs is not null) foreach (var t in entry.Tabs) t.Items.Remove(actionId);
+        Commit(entry);
+        return true;
+    }
+
+    /// <summary>Put an action at <paramref name="index"/> of a tab: the same tab reorders it,
+    /// another carries it across (refused when that one is full).</summary>
+    public bool Move(string appId, string actionId, string tabId, int index)
+    {
+        var app = Find(appId);
+        if (app is null) return false;
+        var entry = Arrange(app);
+        var from = entry.Tabs!.FirstOrDefault(t => t.Items.Contains(actionId));
+        var to = entry.Tabs!.FirstOrDefault(t => t.Id == tabId);
+        if (from is null || to is null) return false;
+        if (to != from && to.Items.Count >= ActionPacks.MaxItems) return false;
+        from.Items.Remove(actionId);
+        to.Items.Insert(Math.Clamp(index, 0, to.Items.Count), actionId);
+        Commit(entry);
+        return true;
+    }
+
+    public string? AddTab(string appId, string? id, string name, int? index)
+    {
+        var app = Find(appId);
+        if (app is null || app.Tabs.Count >= ActionPacks.MaxTabs) return null;
+        var entry = Arrange(app);
+        name = Truncate(name.Trim(), MaxTabName);
+        if (name.Length == 0) name = "Tab " + (entry.Tabs!.Count + 1);
+        if (id is null || !ValidId(id) || entry.Tabs!.Any(t => t.Id == id)) id = NewTabId(entry.Tabs!.Select(t => t.Id));
+        entry.Tabs!.Insert(Math.Clamp(index ?? entry.Tabs.Count, 0, entry.Tabs.Count), new ActionTabLayout { Id = id, Name = name });
+        Commit(entry);
+        return id;
+    }
+
+    public bool RenameTab(string appId, string tabId, string name)
+    {
+        var app = Find(appId);
+        name = Truncate((name ?? "").Trim(), MaxTabName);
+        if (app is null || name.Length == 0) return false;
+        var entry = Arrange(app);
+        if (entry.Tabs!.FirstOrDefault(t => t.Id == tabId) is not { } tab) return false;
+        tab.Name = name;
+        Commit(entry);
+        return true;
+    }
+
+    public bool MoveTab(string appId, string tabId, int index)
+    {
+        var app = Find(appId);
+        if (app is null) return false;
+        var entry = Arrange(app);
+        if (entry.Tabs!.FirstOrDefault(t => t.Id == tabId) is not { } tab) return false;
+        entry.Tabs!.Remove(tab);
+        entry.Tabs!.Insert(Math.Clamp(index, 0, entry.Tabs.Count), tab);
+        Commit(entry);
+        return true;
+    }
+
+    /// <summary>A tab and everything on it, as if each were removed. The last tab stays.</summary>
+    public bool RemoveTab(string appId, string tabId)
+    {
+        var app = Find(appId);
+        if (app is null || app.Tabs.Count <= 1) return false;
+        var entry = Arrange(app);
+        if (entry.Tabs!.FirstOrDefault(t => t.Id == tabId) is not { } tab) return false;
+        var pack = ActionPacks.Find(app.Id);
+        foreach (var id in tab.Items)
+        {
+            entry.Actions.RemoveAll(a => a.Id == id);
+            if (pack?.Actions.Any(a => a.Id == id) == true && !entry.Removed.Contains(id)) entry.Removed.Add(id);
+        }
+        entry.Tabs!.Remove(tab);
+        Commit(entry);
+        return true;
+    }
+
+    /// <summary>Back to the pack: every change, arrangement and action of the user's goes. A pack
+    /// added by hand stays in the grid. Only for packs; a custom app has nothing to go back to.</summary>
     public bool Reset(string appId)
     {
-        if (ActionPacks.Find(appId) is null) return false;
-        var n = _file.Apps.RemoveAll(a => a.Id.Equals(appId, StringComparison.OrdinalIgnoreCase));
-        if (n == 0) return false;
-        Save();
-        Rebuild();
+        if (ActionPacks.Find(appId) is null || Entry(appId) is not { } e || e.Untouched) return false;
+        e.Actions.Clear();
+        e.Tabs = null;
+        e.Removed.Clear();
+        Commit(e);
         return true;
     }
 
@@ -227,65 +467,57 @@ internal class ActionService
             var entry = FileEntry(pack.Id);
             entry.Pinned = true;
             if (path is not null) entry.Path = path;
-            Save();
-            Rebuild();
+            Commit();
             return (pack.Id, existed);
         }
 
         if (_snapshot.ForExe(exe) is { } have) return (have.Id, true);
 
-        var app = new ActionApp
+        _file.Apps.Add(new ActionAppFile
         {
             Id = exe,
             Name = Truncate((name ?? "").Trim().Length > 0 ? name!.Trim() : PrettyName(path, exe), 48),
             Exes = new List<string> { exe },
             Path = path,
-            Custom = true,
-        };
-        _file.Apps.Add(app);
-        Save();
-        Rebuild();
-        return (app.Id, false);
+        });
+        Commit();
+        return (exe, false);
     }
 
     public bool RemoveApp(string appId)
     {
         var app = Find(appId);
         if (app is null || app.Id == ActionPacks.EverywhereId) return false;
-        if (!app.Custom)
-        {
-            // A pack that was added by hand: unpin it. One found on the PC cannot be removed, only
-            // reset; the grid would put it straight back.
-            var entry = _file.Apps.FirstOrDefault(a => a.Id.Equals(app.Id, StringComparison.OrdinalIgnoreCase));
-            if (entry is null || !entry.Pinned) return false;
-            entry.Pinned = false;
-            Save();
-            Rebuild();
-            return true;
-        }
+        // A pack: only one added by hand, which goes back to the pack as it leaves the grid. One
+        // found on the PC cannot be removed, only reset; the grid would put it straight back.
+        if (!app.Custom && Entry(app.Id) is not { Pinned: true }) return false;
         var n = _file.Apps.RemoveAll(a => a.Id.Equals(app.Id, StringComparison.OrdinalIgnoreCase));
         if (n == 0) return false;
-        lock (_gate) _icons.Remove(app.Id);
-        Save();
-        Rebuild();
+        if (app.Custom) lock (_gate) _icons.Remove(app.Id);
+        Commit();
         return true;
     }
 
     public bool RenameApp(string appId, string name)
     {
         var app = Find(appId);
-        if (app is null || !app.Custom) return false;
-        var entry = _file.Apps.FirstOrDefault(a => a.Id.Equals(app.Id, StringComparison.OrdinalIgnoreCase));
-        if (entry is null) return false;
+        if (app is null || !app.Custom || Entry(app.Id) is not { } entry) return false;
         name = Truncate(name.Trim(), 48);
         if (name.Length == 0) return false;
         entry.Name = name;
-        Save();
-        Rebuild();
+        Commit();
         return true;
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
+
+    /// <summary>A description as it may be stored: one line, no control characters, at most 120
+    /// characters (the wheel's centre shows two lines of about 40); null for none.</summary>
+    private static string? CleanDesc(string? desc)
+    {
+        var s = new string((desc ?? "").Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+        return s.Length == 0 ? null : Truncate(s, 120);
+    }
 
     /// <summary>"Ctrl+Shift+T" spelt the way the page spells it, whatever was typed.</summary>
     private static string Normalize(string keys)
@@ -293,7 +525,7 @@ internal class ActionService
         var parts = ShortcutKeys.Parts(keys);
         var order = new[] { "Ctrl", "Shift", "Alt", "Win" };
         var mods = order.Where(m => parts.Take(parts.Count - 1).Contains(m, StringComparer.OrdinalIgnoreCase));
-        return string.Join("+", mods.Append(parts[^1]));
+        return string.Join("+", mods.Append(ShortcutKeys.CanonicalKey(parts[^1])));
     }
 
     /// <summary>A button combo in the launcher's own names and order, or null. Unknown names
@@ -717,8 +949,16 @@ internal class ActionService
         _latched |= b.Mask;
         try
         {
-            SendKeys(b.Keys);
-            Log.Info($"Action: {b.Combo} → {b.Keys} ({b.Name}) in {(_fgApp?.Name ?? "no app")}");
+            if (b.Shortcut is { } id)
+            {
+                Log.Info($"Shortcut: {b.Combo} → {b.Name} in {(_fgApp?.Name ?? "no app")}");
+                ShortcutFired?.Invoke(id);
+            }
+            else
+            {
+                SendKeys(b.Keys);
+                Log.Info($"Action: {b.Combo} → {b.Keys} ({b.Name}) in {(_fgApp?.Name ?? "no app")}");
+            }
         }
         catch (Exception ex) { Log.Info($"Action {b.Name} failed: {ex.Message}"); }
         return b.Mask;
@@ -731,7 +971,9 @@ internal class ActionService
         _pending = null;
     }
 
-    private sealed record Binding(string Combo, uint Mask, int Parts, string Keys, string Name);
+    /// <param name="Shortcut">Set for a Power Wheel shortcut's button: it opens that shortcut
+    /// rather than sending <paramref name="Keys"/>.</param>
+    private sealed record Binding(string Combo, uint Mask, int Parts, string Keys, string Name, string? Shortcut = null);
 
     /// <summary>The resolved apps plus their bindings, built once per edit and read without locks.</summary>
     private sealed class Snapshot
@@ -741,7 +983,7 @@ internal class ActionService
         private readonly Dictionary<string, Binding[]> _bindings = new(StringComparer.OrdinalIgnoreCase);
         private readonly Binding[] _everywhere;
 
-        public Snapshot(IReadOnlyList<ActionApp> apps)
+        public Snapshot(IReadOnlyList<ActionApp> apps, IReadOnlyList<(string Combo, string Id, string Name)>? shortcuts = null)
         {
             Apps = apps;
             foreach (var app in apps)
@@ -755,6 +997,16 @@ internal class ActionService
                     .ToArray();
             }
             _everywhere = _bindings.TryGetValue(ActionPacks.EverywhereId, out var e) ? e : Array.Empty<Binding>();
+            // The shortcuts' buttons ride with Everywhere's, under them: both pages refuse a button
+            // the other already has, so a clash only comes from a hand-edited file, and then the
+            // action keeps it.
+            var mine = (shortcuts ?? Array.Empty<(string, string, string)>())
+                .Where(s => !IsReservedButton(s.Combo))
+                .Select(s => (s, mask: GamepadService.ChordMask(s.Combo)))
+                .Where(x => x.mask != 0 && !_everywhere.Any(a => a.Combo == x.s.Combo))
+                .Select(x => new Binding(x.s.Combo, x.mask, BitOperations.PopCount(x.mask), "", x.s.Name, x.s.Id))
+                .GroupBy(b => b.Combo).Select(g => g.First());
+            _everywhere = _everywhere.Concat(mine).ToArray();
         }
 
         public ActionApp? ForExe(string? exe) =>

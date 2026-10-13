@@ -3,34 +3,38 @@
 /*
  * Actions: a program's keyboard shortcuts, on the pad.
  *
- * Three pieces, all fed by S.actions (the host's apps, packs merged with the user's changes):
+ * Three pieces, all fed by S.actions (the host's apps, packs merged with the user's changes, each
+ * app's actions on tabs of up to eight):
  *
  *   1. The action wheel. The Power Wheel's Actions spoke opens a second wheel with the shortcuts of
  *      whatever was in front when the menu came up -- the host names the exe, this file matches
- *      it to an app -- eight to a page, the Everywhere set after the app's own. A spoke shows
- *      the action, its keys and the pad button it is bound to; A presses it, and a bound button
- *      presses its action directly. Firing hands the foreground back to that window first, so
- *      the keys land where they were meant to.
+ *      it to an app -- one tab to a wheel, the app's own tabs first and Everywhere's after, LB and
+ *      RB turning between them. A spoke shows the action, its keys and the pad button it is bound
+ *      to; A presses it, and a bound button presses its action directly. Firing hands the
+ *      foreground back to that window first, so the keys land where they were meant to.
  *
  *   2. Settings → Actions. A grid of the apps on this PC we have actions for, plus Everywhere and
- *      the user's own; A on a tile drills into its list, A on an action into its editor. Three
- *      levels in the same pane, B going back up one at a time, so it reads as one place rather
- *      than a stack of popups.
+ *      the user's own; A on a tile opens that app's wheel in the wheel editor (wheeledit.js), the
+ *      same one Settings → Shortcuts is: A edits an action (the form sheet, over the wheel), the +
+ *      spoke adds one, Y moves one round the ring or to another tab, X has the tab's options and
+ *      the app's own (restore, rename, remove). B goes back to the grid.
  *
  *   3. The two pickers an action needs: "press a button" (the host records the next press or
  *      chord and swallows it) and a keyboard laid out to point at, for the shortcut.
  *
  * Bindings fire on the host, in the pad loop, only while the app is in front and the launcher is
- * not; this file never sends a key. Loaded after radial.js and shares app.js's globals.
+ * not; this file never sends a key. Loaded after radial.js and wheeledit.js and shares app.js's
+ * globals.
  */
 
-const ACTION_SPOKES = 8;
 const EVERYWHERE_ID = "everywhere";
 const MOD_ORDER = ["Ctrl", "Shift", "Alt", "Win"];
 
 /* ---- the data ---- */
 
 function actionApps() { return (S.actions && S.actions.apps) || []; }
+function actionsMaxItems() { return (S.actions && S.actions.maxItems) || 8; }
+function actionsMaxTabs() { return (S.actions && S.actions.maxTabs) || 12; }
 /* The next list with the icons of the last one where it has none of its own: a state push
    leaves them out, and an app's icon never changes between two messages anyway. */
 function withActionIcons(next, prev) {
@@ -46,6 +50,13 @@ function appForProcess(exe) {
   if (!exe) return null;
   return actionApps().find(a => a.id !== EVERYWHERE_ID && (a.exes || []).some(e => String(e).toLowerCase() === exe)) || null;
 }
+/* An app's picture at a small size, for the wheel's centre and its pager: the globe for Everywhere,
+   the program's own icon, or its first letter in a rounded square when there is no icon. */
+function actionAppIconHtml(app, cls) {
+  if (!app || app.id === EVERYWHERE_ID) return iconSvg("globe");
+  if (app.icon) return `<span class="${cls}" style="background-image:url('${scCssUrl(app.icon)}')"></span>`;
+  return `<span class="${cls} app-mono-sm">${esc((app.name || "?").trim().charAt(0).toUpperCase())}</span>`;
+}
 /* What the Settings grid shows: Everywhere first, then the rest by name. A pack for a program
    that is not on this PC stays out of the way. */
 function shownApps() {
@@ -54,8 +65,10 @@ function shownApps() {
   const rest = apps.filter(a => a.id !== EVERYWHERE_ID).sort((a, b) => a.name.localeCompare(b.name));
   return ev.concat(rest);
 }
-function visibleActions(app) { return ((app && app.actions) || []).filter(a => !a.hidden); }
-function actionById(app, id) { return ((app && app.actions) || []).find(a => a.id === id) || null; }
+/* Every action on an app's wheel, tab by tab: what its buttons and the checks read. */
+function appActions(app) { return ((app && app.tabs) || []).flatMap(t => t.items || []); }
+function actionById(app, id) { return appActions(app).find(a => a.id === id) || null; }
+function actionNewId() { return "c" + Math.random().toString(16).slice(2, 10).padEnd(8, "0"); }
 
 /* ---- keys, as text and as caps ---- */
 
@@ -147,16 +160,22 @@ function bindingIssues(app, action, combo) {
 
   const left = canonBtn(s.leftClickButton || "A"), right = canonBtn(s.rightClickButton || "B");
   if (single && (single === left || single === right) && !(single === "A" || single === "B"))
-    issues.push({ level: "warn", text: `${say(single)} is the ${single === left ? "left" : "right"} click button. In ${esc(app.name)} it fires this instead of clicking.` });
+    issues.push({ level: "warn", text: `${say(single)} is the ${single === left ? "left" : "right"} click button. ${app ? `In ${esc(app.name)} it` : "It"} fires this instead of clicking.` });
 
   if (app) {
-    const twin = (app.actions || []).find(a => a !== action && a.id !== (action && action.id) && comboEq(a.button, combo));
+    const twin = appActions(app).find(a => a !== action && a.id !== (action && action.id) && comboEq(a.button, combo));
     if (twin) issues.push({ level: "block", text: `${esc(twin.name)} already uses that button here. Pick another, or clear it there first.` });
     if (app.id !== EVERYWHERE_ID) {
-      const ev = everywhereApp();
-      const over = ev && (ev.actions || []).find(a => comboEq(a.button, combo));
+      const over = appActions(everywhereApp()).find(a => comboEq(a.button, combo));
       if (over) issues.push({ level: "note", text: `Overrides Everywhere's “${esc(over.name)}” while ${esc(app.name)} is in front.` });
     }
+    // The Power Wheel's shortcuts answer in every app, as Everywhere does (shortcuts.js): the two
+    // never share a button, and an app's own action wins over a shortcut while the app is in front.
+    const sc = scAllItems().find(x => comboEq(x.button, combo));
+    if (sc && app.id === EVERYWHERE_ID)
+      issues.push({ level: "block", text: `The shortcut “${esc(sc.name)}” already uses that button (Settings › Shortcuts). Pick another.` });
+    else if (sc)
+      issues.push({ level: "note", text: `Overrides the shortcut “${esc(sc.name)}” while ${esc(app.name)} is in front.` });
   }
   return issues;
 }
@@ -174,22 +193,21 @@ function bindingNotes(app, action) {
 /* actionWheelOpen, captureState, keyPick and overlayTargetProcess are declared in app.js with the
    other overlay flags: app.js reads them, and a `let` in a later script is out of reach while
    app.js boots. */
-let actionPages = [];          // [{ app, items }]
+let actionPages = [];          // [{ app, tab, items }]
 let actionPage = 0, actionIdx = 0;
 
-/* The pages: the app in front's visible actions, eight a page, then Everywhere's. With nothing
-   for the app there is still a page for it, empty, so the wheel can say so and point at Settings. */
+/* The pages: the app in front's tabs, then Everywhere's, one wheel each. An empty tab is left out:
+   on the Power Wheel it would only be a stop between two that have something on them. With
+   nothing at all there is still one page, empty, so the wheel can say so and point at Settings. */
 function buildActionPages() {
   const target = appForProcess(overlayTargetProcess);
   const pages = [];
-  const chunk = (app) => {
-    const list = visibleActions(app);
-    for (let i = 0; i < list.length; i += ACTION_SPOKES) pages.push({ app, items: list.slice(i, i + ACTION_SPOKES) });
-  };
-  if (target) chunk(target);
-  const ev = everywhereApp();
-  if (ev) chunk(ev);
-  if (!pages.length) pages.push({ app: target || ev || { id: "", name: "Actions", actions: [] }, items: [] });
+  const add = (app) => ((app && app.tabs) || []).forEach(tab => {
+    if ((tab.items || []).length) pages.push({ app, tab, items: tab.items });
+  });
+  add(target);
+  add(everywhereApp());
+  if (!pages.length) pages.push({ app: target || everywhereApp() || { id: "", name: "Actions", tabs: [] }, tab: null, items: [] });
   return pages;
 }
 
@@ -213,11 +231,31 @@ function closeActionWheel(backToRadial) {
 function actionSpokeHtml(it) {
   return `<span class="spoke-name">${esc(it.name)}</span>` +
     `<span class="spoke-keys">${keysHtml(it.keys)}</span>` +
-    (it.button ? `<span class="spoke-btn">${comboHtml(it.button)}</span>` : "");
+    (it.button ? spokeBtnHtml(it.button) : "");
+}
+
+/* The button a spoke is bound to (an action's here, a shortcut's in shortcuts.js): a row along the
+   bottom of the spoke, inside it. The pictures get smaller as the chord grows, so a five-button
+   chord still fits the box; it used to be a badge hung off the spoke's corner, and a long chord
+   ran across its neighbours. */
+function spokeBtnHtml(combo) {
+  const n = Math.max(1, String(combo).split("+").filter(p => p.trim()).length);
+  const h = [26, 26, 24, 21, 19, 17][Math.min(n, 5)];
+  return `<span class="spoke-btn" style="--btn-h:${h}px">${comboHtml(combo)}</span>`;
+}
+
+/* A row of page names can be wider than the pager: the one in force is kept in view, and the edge
+   with more beyond it fades rather than cutting a name in half. Both wheels' pagers. */
+function centerPager(pages) {
+  const on = pages && pages.querySelector(".on");
+  if (!on) return;
+  pages.scrollLeft = Math.max(0, on.offsetLeft - (pages.clientWidth - on.offsetWidth) / 2);
+  pages.classList.toggle("more-left", pages.scrollLeft > 1);
+  pages.classList.toggle("more-right", pages.scrollLeft + pages.clientWidth < pages.scrollWidth - 1);
 }
 
 function renderActionWheel(rebuild) {
-  const page = actionPages[actionPage] || { app: { name: "Actions" }, items: [] };
+  const page = actionPages[actionPage] || { app: { name: "Actions" }, tab: null, items: [] };
   const items = page.items;
   const n = items.length;
   actionIdx = n ? Math.max(0, Math.min(actionIdx, n - 1)) : 0;
@@ -250,18 +288,18 @@ function renderActionWheel(rebuild) {
       + (it.keys ? "" : " no-keys");
   });
 
-  const total = actionPages.length;
-  $("actionsTitle").textContent = "ACTIONS" + (total > 1 ? ` · ${actionPage + 1} / ${total}` : "");
-  const appIcon = page.app.id === EVERYWHERE_ID ? iconSvg("globe")
-    : page.app.icon ? `<span class="app-icon-sm" style="background-image:url('${page.app.icon}')"></span>`
-    : iconSvg("bolt");
+  $("actionsTitle").textContent = "ACTIONS";
+  const appIcon = actionAppIconHtml(page.app, "app-icon-sm");
   $("actionsApp").innerHTML = appIcon + `<span>${esc(String(page.app.name || "").toUpperCase())}</span>`;
   const sel = items[actionIdx];
   if (sel) {
     $("actionsSelName").textContent = sel.name;
+    // Two lines at most: the pack's own always fit, one typed in Settings is cut with an ellipsis.
+    $("actionsDesc").innerHTML = sel.desc ? `<span>${esc(sel.desc)}</span>` : "";
     $("actionsKeys").innerHTML = keysHtml(sel.keys, "big") + (sel.button ? `<span class="actions-btn">${comboHtml(sel.button)}</span>` : "");
   } else {
     $("actionsSelName").textContent = "Nothing here yet";
+    $("actionsDesc").innerHTML = "";
     $("actionsKeys").innerHTML = `<span class="actions-hint">Add actions under Settings › Actions</span>`;
   }
   const target = appForProcess(overlayTargetProcess);
@@ -270,17 +308,29 @@ function renderActionWheel(rebuild) {
     : "NO APP IN FRONT";
   $("actionsTarget").textContent = targetLine;
   // The pager is its own row between the ring and the legend, so it never lands on a spoke: the
-  // shoulders either side say how to turn the page, and each is clickable like a legend entry.
+  // tabs by name between the shoulders, each clickable, each led by its app's icon (the globe for
+  // Everywhere's), and a rule where the app's own end and Everywhere's begin.
   const pager = $("actionsPager");
+  const total = actionPages.length;
   pager.hidden = total < 2;
   pager.innerHTML = total > 1
     ? `<div class="legend-item" data-press="LB">${slot("LB")}</div>` +
-      `<div class="actions-pages">${actionPages.map((p, i) =>
-        `<i class="${i === actionPage ? "on" : ""}${p.app.id === EVERYWHERE_ID ? " ev" : ""}"></i>`).join("")}</div>` +
+      `<div class="sc-pages actions-pages">${actionPages.map((p, i) =>
+        (i > 0 && p.app.id !== actionPages[i - 1].app.id ? `<span class="actions-pages-div"></span>` : "") +
+        `<span class="sc-page${i === actionPage ? " on" : ""}" data-action-page="${i}">${actionAppIconHtml(p.app, "page-icon")}<span>${esc(p.tab ? p.tab.name : p.app.name)}</span></span>`).join("")}</div>` +
       `<div class="legend-item" data-press="RB">${slot("RB")}</div>`
     : "";
+  centerPager(pager.querySelector(".actions-pages"));
   $("actionsFoot").innerHTML = foot(["A", "Press"], ["B", "Back"]);
 }
+
+$("actionsPager").addEventListener("click", (e) => {
+  const page = e.target instanceof Element ? e.target.closest("[data-action-page]") : null;
+  if (!page || !actionWheelOpen) return;
+  actionPage = parseInt(page.dataset.actionPage, 10) || 0;
+  actionIdx = 0;
+  renderActionWheel(true);
+});
 
 function actionPageStep(dir) {
   const total = actionPages.length;
@@ -290,12 +340,12 @@ function actionPageStep(dir) {
   renderActionWheel(true);
 }
 
-/* An action bound to a button, for the app in front first and Everywhere second: what a press
-   of that button does on the wheel, hidden or not. */
+/* An action bound to a button, for the app in front first and Everywhere second: what a press of
+   that button does on the wheel, whichever tab it is on. */
 function boundAction(btn) {
   const target = appForProcess(overlayTargetProcess);
   for (const app of [target, everywhereApp()]) {
-    const hit = app && (app.actions || []).find(a => a.button && comboEq(a.button, btn));
+    const hit = app && appActions(app).find(a => a.button && comboEq(a.button, btn));
     if (hit) return { app, action: hit };
   }
   return null;
@@ -344,32 +394,31 @@ function actionWheelStick(x, y) {
    were if they still exist. */
 function refreshActionWheel() {
   if (!actionWheelOpen) return;
+  const was = actionPages[actionPage];
   actionPages = buildActionPages();
-  actionPage = Math.min(actionPage, actionPages.length - 1);
+  const same = was && was.tab ? actionPages.findIndex(p => p.app.id === was.app.id && p.tab && p.tab.id === was.tab.id) : -1;
+  actionPage = same >= 0 ? same : Math.min(actionPage, actionPages.length - 1);
   renderActionWheel(true);
 }
 
 /* ============================== Settings → Actions ============================== */
 
-/* Which level of the category is showing, and of what. Reset to the grid whenever the category
-   is entered afresh (setSettingsTab). */
-let actionsUi = { level: "apps", appId: null, actionId: null };
+/* Which level of the category is showing: the grid of apps, or one app's wheel. Back to the grid
+   whenever the category is entered afresh (setSettingsTab). acUi, the wheel editor's own state for
+   the app on screen, is declared in app.js with scUi. */
+let actionsUi = { level: "apps", appId: null };
 
-function actionsTabReset() { actionsUi = { level: "apps", appId: null, actionId: null }; }
+function actionsTabReset() {
+  weReset(acModel);
+  actionsUi = { level: "apps", appId: null };
+}
 function actionsGridMode() { return settingsTab === "actions" && actionsUi.level === "apps"; }
 
-/* The rows the generic settings renderer draws for this category, by level. At the grid level
-   each "row" is a tile; renderSettings draws those differently but drives them the same way. */
+/* The rows the generic settings renderer counts. At the grid level each "row" is a tile, drawn
+   differently but driven the same way; an app's level is its wheel, one row per spoke. */
 function actionsSettingsRows() {
   if (actionsUi.level === "app") {
-    const app = actionApp(actionsUi.appId);
-    if (app) return actionsAppRows(app);
-    actionsTabReset();
-  }
-  if (actionsUi.level === "action") {
-    const app = actionApp(actionsUi.appId);
-    const a = actionById(app, actionsUi.actionId);
-    if (app && a) return actionsEditorRows(app, a);
+    if (actionApp(actionsUi.appId)) return weRows(acModel);
     actionsTabReset();
   }
   const rows = [];
@@ -381,178 +430,360 @@ function actionsSettingsRows() {
   return rows;
 }
 
-function enterActionsApp(appId, actionIdx) {
-  actionsUi = { level: "app", appId, actionId: null };
+function enterActionsApp(appId) {
+  weReset(acModel);
+  actionsUi = { level: "app", appId };
   settingsPane = "rows";
-  settingsIdx = actionIdx || 0;
+  settingsIdx = 0;
   renderSettings();
   pulse($("settingsScroll"));
 }
 
-function enterActionsEditor(appId, actionId, rowIdx) {
-  actionsUi = { level: "action", appId, actionId };
-  settingsPane = "rows";
-  settingsIdx = rowIdx || 0;
-  renderSettings();
-  pulse($("settingsScroll"));
-}
-
-/* B inside the category: up one level, landing on what was opened. False at the grid, where B
-   means the categories. */
+/* B on an app's wheel: back to the grid, landing on its tile. False at the grid, where B means
+   the categories. */
 function actionsBack() {
-  if (actionsUi.level === "action") {
-    const app = actionApp(actionsUi.appId);
-    const i = app ? (app.actions || []).findIndex(a => a.id === actionsUi.actionId) : -1;
-    enterActionsApp(actionsUi.appId, Math.max(0, i));
-    return true;
-  }
-  if (actionsUi.level === "app") {
-    const i = shownApps().findIndex(a => a.id === actionsUi.appId);
-    actionsTabReset();
-    settingsPane = "rows";
-    settingsIdx = Math.max(0, i);
-    renderSettings();
-    pulse($("settingsScroll"));
-    return true;
-  }
-  return false;
+  if (actionsUi.level !== "app") return false;
+  const i = shownApps().findIndex(a => a.id === actionsUi.appId);
+  weReset(acModel);
+  actionsUi = { level: "apps", appId: null };
+  settingsPane = "rows";
+  settingsIdx = Math.max(0, i);
+  renderSettings();
+  pulse($("settingsScroll"));
+  return true;
 }
 
-/* One app's list: every action as a row showing its keys and its button, then the management
-   rows. Hidden actions stay in the list, dimmed, so they can be brought back. */
-function actionsAppRows(app) {
-  const rows = [];
-  const list = app.actions || [];
-  const bound = list.filter(a => a.button).length;
-  const bits = [`${list.length} action${list.length === 1 ? "" : "s"}`];
-  if (bound) bits.push(`${bound} on a button`);
-  if (app.id === EVERYWHERE_ID) bits.push("in every app");
-  rows.push({ section: `${app.name.toUpperCase()} · ${bits.join(" · ").toUpperCase()}`, cat: "actions" });
-  if (!list.length)
-    rows.push({ name: "No actions yet", hint: "Add one below: a shortcut the program understands, a name, and a button if you want one", type: "html", valueHtml: "", action: () => startAddAction(app) });
-  list.forEach((a, i) => {
-    const notes = [];
-    if (a.hidden) notes.push("Hidden from the wheel");
-    if (!a.keys) notes.push("No shortcut yet");
-    const warn = bindingWarn(app, a);
-    rows.push({
-      name: a.name, hint: notes.join(" · ") || null, warn, muted: a.hidden,
-      type: "html",
-      valueHtml: `${keysHtml(a.keys)}${a.button ? `<span class="set-btn">${comboHtml(a.button)}</span>` : ""}<span class="arrow">▸</span>`,
-      action: () => enterActionsEditor(app.id, a.id, 0),
-    });
-  });
-  rows.push({ section: "MANAGE", cat: "actions" });
-  rows.push({
-    name: "Add an action", hint: "A name, then the shortcut, then a button if you want one",
-    type: "action", label: "Add",
-    action: () => startAddAction(app),
-  });
-  if (app.custom) rows.push({
-    name: "Rename", hint: app.name, type: "action", label: "Rename",
-    action: () => openInput("APP NAME", app.name, v => { if (v) { app.name = v; send({ cmd: "actionAppRename", appId: app.id, name: v }); renderSettings(); } }),
-  });
-  if (!app.custom && app.modified) rows.push({
-    name: "Reset to defaults", hint: "Every change and every action you added here goes; the pack comes back as shipped",
-    type: "action", label: "Reset",
+function acApp() { return actionsUi.level === "app" ? actionApp(actionsUi.appId) : null; }
+function acTabs() { const app = acApp(); return (app && app.tabs) || []; }
+function acFind(id) { return weFind(acModel, id); }
+function acActive() { return view === "settings" && settingsTab === "actions" && actionsUi.level === "app"; }
+function acWhere(app) { return app.id === EVERYWHERE_ID ? "whatever app is in front" : app.name; }
+
+/* The app's wheel in the wheel editor: what is on it, and what each edit tells the host. */
+const acModel = {
+  key: "actions",
+  focusPrefix: "setrow:actwheel:",
+  addLabel: "Add an action",
+  backLabel: "Apps",
+  get ui() { return acUi; },
+  tabs: () => acTabs(),
+  setTabs: (tabs) => { const app = acApp(); if (app) app.tabs = tabs; },
+  maxItems: () => actionsMaxItems(),
+  maxTabs: () => actionsMaxTabs(),
+  shape: () => "actions|" + actionsUi.appId,
+  spokeHtml: (it) => it ? actionSpokeHtml(it) : `<div class="sc-glyph">${iconSvg("plus")}</div><span class="spoke-name">Add an action</span>`,
+  spokeClass: (it) => "ac-spoke" + (it.danger ? " danger" : "") + (it.keys ? "" : " no-keys"),
+  cardHtml: (tab, sel, onAdd) => acCardHtml(tab, sel, onAdd),
+  movingIconHtml: (it) => it ? keysHtml(it.keys, "big") : "",
+  headHtml: () => acHeadHtml(),
+  edit: (id) => acEdit(id),
+  add: (tab) => acStartAdd(tab),
+  rename: (it) => openInput("ACTION NAME", it.name, v => { if (v) acSave({ ...it, name: v }); }),
+  remove: (it) => acConfirmRemove(it),
+  back: () => actionsBack(),
+  applyPending: () => acApplyPending(),
+  newTabId: () => "t" + Math.random().toString(16).slice(2, 10).padEnd(8, "0"),
+  deleteTabText: (t, n) => {
+    const app = acApp();
+    const own = (t.items || []).filter(a => !a.custom).length;
+    return {
+      sub: n ? `Its ${n === 1 ? "action goes" : n + " actions go"} with it` : "It is empty",
+      body: !n ? "It has nothing on it."
+        : own && app && !app.custom ? `${app.name}'s own actions on it can be added back later; any you made yourself are deleted.`
+        : "The actions on it are deleted.",
+    };
+  },
+  tabOptionsExtra: () => acAppOptions(),
+  send: {
+    move: (id, tabId, index) => send({ cmd: "actionMove", appId: actionsUi.appId, actionId: id, tabId, index }),
+    tabAdd: (id, name, index) => send({ cmd: "actionTabAdd", appId: actionsUi.appId, id, name, index }),
+    tabRename: (id, name) => send({ cmd: "actionTabRename", appId: actionsUi.appId, id, name }),
+    tabMove: (id, index) => send({ cmd: "actionTabMove", appId: actionsUi.appId, id, index }),
+    tabRemove: (id) => send({ cmd: "actionTabRemove", appId: actionsUi.appId, id }),
+  },
+};
+
+/* Which app's wheel this is, at the start of the tab strip. */
+function acHeadHtml() {
+  const app = acApp();
+  if (!app) return "";
+  const icon = app.id === EVERYWHERE_ID ? iconSvg("globe")
+    : app.icon ? `<span class="app-icon-sm" style="background-image:url('${scCssUrl(app.icon)}')"></span>`
+    : `<span class="ac-head-mono">${esc((app.name || "?").trim().charAt(0).toUpperCase())}</span>`;
+  return `<div class="ac-head">${icon}<span>${esc(app.name)}</span></div>`;
+}
+
+function acCardHtml(tab, sel, onAdd) {
+  const app = acApp();
+  if (!tab || !app) return "";
+  if (onAdd || !sel) {
+    const left = actionsMaxItems() - (tab.items || []).length;
+    const spare = (app.spare || []).length;
+    return `<div class="sc-card-icon add">${iconSvg("plus")}</div>` +
+      `<div class="sc-card-kind mono">${esc(tab.name.toUpperCase())}</div>` +
+      `<div class="sc-card-name">Add an action</div>` +
+      `<div class="sc-card-what">${app.id === EVERYWHERE_ID ? "A keyboard shortcut for whatever app is in front" : `A keyboard shortcut ${esc(app.name)} understands`}, with a name and, if you like, a button.</div>` +
+      (spare ? `<div class="sc-card-note">${spare === 1 ? `One of ${esc(app.name)}'s own is off the wheel` : `${spare} of ${esc(app.name)}'s own are off the wheel`}, and offered first</div>` : "") +
+      `<div class="sc-card-note">${left === 1 ? "Room for one more on this tab" : `Room for ${left} more on this tab`}</div>`;
+  }
+  const notes = [];
+  const warn = sel.button ? bindingWarn(app, sel) : null;
+  if (warn) notes.push(`<div class="sc-card-warn">${hintHtml(warn)}</div>`);
+  else if (sel.button) bindingNotes(app, sel).forEach(n => notes.push(`<div class="sc-card-note">${hintHtml(n)}</div>`));
+  if (!sel.keys) notes.push(`<div class="sc-card-warn">No shortcut yet, so it does nothing. A, then Keyboard shortcut.</div>`);
+  const kind = sel.custom ? "YOUR OWN" : "BUILT IN" + (sel.edited ? " · CHANGED" : "");
+  return `<div class="sc-card-icon ac-card-keys">${keysHtml(sel.keys, "big")}</div>` +
+    `<div class="sc-card-kind mono">${esc(kind)}</div>` +
+    `<div class="sc-card-name">${esc(sel.name)}</div>` +
+    `<div class="sc-card-what">${esc(sel.desc || acSentTo(app))}</div>` +
+    (sel.desc ? `<div class="sc-card-note">${esc(acSentTo(app))}</div>` : "") +
+    `<div class="sc-card-row"><span>Button</span><span>${sel.button ? comboHtml(sel.button) : `<span class="set-none">None</span>`}</span></div>` +
+    notes.join("");
+}
+
+/* The app's own options, under the tab's: restore the pack, rename or remove an app of one's own. */
+function acAppOptions() {
+  const app = acApp();
+  if (!app) return [];
+  const items = [];
+  if (!app.custom && app.modified) items.push({
+    label: `Restore ${app.name}'s defaults`, icon: "refresh", sub: "Every tab, change and action of your own here goes",
     action: () => askConfirm({
-      title: `Reset ${app.name}?`, body: "Its actions go back to the defaults. Your own actions here are removed.",
-      yesLabel: "Reset", icon: "refresh", danger: true,
-      onYes: () => { send({ cmd: "actionAppReset", appId: app.id }); settingsIdx = 0; },
+      title: `Restore ${app.name}'s defaults?`, body: "Its tabs and actions go back to how Loungepad ships them. Actions you made yourself are deleted.",
+      yesLabel: "Restore", icon: "refresh", danger: true,
+      onYes: () => { send({ cmd: "actionAppReset", appId: app.id }); acUi.tab = 0; settingsIdx = 0; },
     }),
   });
-  if (app.custom || app.pinned) rows.push({
-    name: "Remove this app", hint: app.custom ? "Its actions go with it" : "The program stays on this PC; it comes back if you add it again",
-    type: "action", label: "Remove", danger: true,
+  if (app.custom) items.push({
+    label: "Rename this app", icon: "edit", sub: app.name,
+    action: () => openInput("APP NAME", app.name, v => { if (v) { app.name = v; send({ cmd: "actionAppRename", appId: app.id, name: v }); renderSettings(); } }),
+  });
+  if (app.custom || app.pinned) items.push({
+    label: "Remove this app", icon: "trash", danger: true,
+    sub: app.custom ? "Its actions go with it" : "The program stays on this PC; it comes back if you add it again",
     action: () => askConfirm({
       title: `Remove ${app.name}?`, body: app.custom ? "Every action you set up for it is deleted." : "Its actions and buttons go back to the defaults, and it leaves the grid.",
       yesLabel: "Remove", icon: "trash", danger: true,
-      onYes: () => { send({ cmd: "actionAppRemove", appId: app.id }); actionsTabReset(); settingsIdx = 0; },
+      onYes: () => { send({ cmd: "actionAppRemove", appId: app.id }); actionsBack(); },
     }),
   });
-  return rows;
+  return items.length ? [{ cat: app.name.toUpperCase() }, ...items] : [];
 }
 
-/* One action's editor. Every change is saved at once: the row it changes is the row you are on. */
-function actionsEditorRows(app, a) {
+/* ---- editing one ---- */
+
+/* Into the page's copy first, so the wheel shows the change before the host answers; its actions
+   push then replaces the list with what it stored. */
+function acSave(next) {
+  const f = acFind(next.id);
+  if (!f) return;
+  f.tab.items[f.index] = { ...f.item, ...next };
+  send({ cmd: "actionUpdate", appId: actionsUi.appId, action: acWire(f.tab.items[f.index]) });
+  if (acActive()) renderSettings();
+}
+
+function acWire(a) { return { id: a.id, name: a.name, keys: a.keys || "", button: a.button || null, desc: a.desc || null }; }
+
+/* Where an action's keys go, in words: the card's line under its description. */
+function acSentTo(app) { return `Sent to ${acWhere(app)}${app.id === EVERYWHERE_ID ? "" : " while it is in front"}`; }
+
+let acEditingId = null;
+
+function acEdit(id, idx) {
+  acEditingId = id;
+  const item = () => (acFind(id) || {}).item;
+  openForm({
+    kind: "action",
+    kicker: () => { const f = acFind(id), app = acApp(); return f && app ? `${app.name.toUpperCase()} · ${f.tab.name.toUpperCase()}` : ""; },
+    title: () => (item() || {}).name || "",
+    sub: () => { const app = acApp(); return app ? `Sent to ${acWhere(app)}` : ""; },
+    rows: () => acEditRows(id),
+    backLabel: "Done",
+    onClose: () => { if (acEditingId === id) acEditingId = null; },
+  });
+  if (idx) { formState.idx = idx; renderForm(); }
+}
+
+/* The edit sheet's row a new action opens on: the button, the one thing still to set. */
+const AC_ROW_BUTTON = 3;
+
+function acEditRows(id) {
+  const f = acFind(id), app = acApp();
+  if (!f || !app) return [{ note: "This action is no longer on the wheel." }];
+  const a = f.item;
+  const save = (patch) => acSave({ ...a, ...patch });
   const rows = [];
-  const save = (patch) => saveAction(app, Object.assign({}, a, patch));
-  rows.push({ section: `${app.name.toUpperCase()} › ${a.name.toUpperCase()}`, cat: "actions" });
   rows.push({
-    name: "Name", type: "html",
-    valueHtml: `<span class="set-text">${esc(a.name)}</span><span class="arrow">▸</span>`,
+    name: "Name", type: "html", aLabel: "Rename",
+    valueHtml: `<span class="set-text">${esc(a.name)}</span>`,
     action: () => openInput("ACTION NAME", a.name, v => { if (v) save({ name: v }); }),
   });
+  // What it does, in a sentence: shown in the wheel's centre as the action is highlighted. A
+  // pack's own comes back when the line is emptied.
   rows.push({
-    name: "Keyboard shortcut",
-    hint: "What the program itself answers to. Sent exactly as if typed on a keyboard",
-    type: "html",
-    valueHtml: `${keysHtml(a.keys)}<span class="arrow">▸</span>`,
+    name: "Description", hint: a.desc || "None yet. A sentence on what it does helps whoever is still learning the shortcut",
+    type: "html", aLabel: a.desc ? "Rewrite" : "Write", valueHtml: "",
+    action: () => openInput("WHAT IT DOES", a.desc || "", v => save({ desc: v || null })),
+  });
+  rows.push({
+    name: "Keyboard shortcut", hint: "What the program itself answers to, sent exactly as if typed on a keyboard",
+    type: "html", aLabel: "Change",
+    valueHtml: keysHtml(a.keys),
     action: () => openKeyPick(a.keys, keys => save({ keys }), `SHORTCUT FOR ${a.name.toUpperCase()}`),
   });
-  const notes = bindingNotes(app, a);
+  const notes = a.button ? bindingNotes(app, a) : [];
   rows.push({
     name: "Controller button",
     hint: (a.button
       ? `Fires “${a.name}” while ${app.id === EVERYWHERE_ID ? "any app" : app.name} is in front and Loungepad is not`
       : "Optional. Press it in the app, with Loungepad out of the way, and the shortcut is sent")
-      + (notes.length ? ". " + notes.join(" ") : ""),
-    warn: bindingWarn(app, a),
-    type: "html",
-    valueHtml: `${a.button ? comboHtml(a.button) : `<span class="set-none">None</span>`}<span class="arrow">▸</span>`,
+      + notes.map(n => ". " + n).join(""),
+    warn: a.button ? bindingWarn(app, a) : null,
+    type: "html", aLabel: "Record",
+    valueHtml: a.button ? comboHtml(a.button) : `<span class="set-none">None</span>`,
     action: () => openCapture(app, a, combo => save({ button: combo })),
   });
-  if (a.button) rows.push({
-    name: "Clear the button", type: "action", label: "Clear",
-    action: () => save({ button: null }),
+  if (a.button) rows.push({ name: "Clear the button", type: "action", label: "Clear", action: () => save({ button: null }) });
+  if (a.edited) rows.push({
+    name: `Restore ${app.name}'s own`, hint: "The name, shortcut, description and button it came with",
+    type: "action", label: "Restore",
+    action: () => send({ cmd: "actionRestore", appId: app.id, actionId: a.id }),
+  });
+  if (acTabs().length > 1) rows.push({
+    name: "Move to another tab", hint: `On ${f.tab.name} now`, type: "action", label: "Move",
+    action: () => acFromForm(back => acPickTab(a, back)),
   });
   rows.push({
-    name: "Show on the wheel", hint: "Off keeps it out of the wheel. A button still works either way",
-    type: "toggle", value: !a.hidden,
-    adjust: () => save({ hidden: !a.hidden }),
-    action: () => save({ hidden: !a.hidden }),
-  });
-  if (a.custom) rows.push({
-    name: "Delete this action", type: "action", label: "Delete", danger: true,
-    action: () => askConfirm({
-      title: `Delete “${a.name}”?`, body: "This cannot be undone.", yesLabel: "Delete", icon: "trash", danger: true,
-      onYes: () => {
-        const i = (app.actions || []).findIndex(x => x.id === a.id);
-        if (i >= 0) app.actions.splice(i, 1);
-        send({ cmd: "actionRemove", appId: app.id, actionId: a.id });
-        enterActionsApp(app.id, Math.max(0, i - 1));
-      },
-    }),
+    name: a.custom ? "Delete this action" : "Take it off the wheel",
+    hint: a.custom ? null : "It can be added back with the + spoke",
+    type: "action", label: a.custom ? "Delete" : "Remove", danger: true,
+    action: () => acConfirmRemove(a),
   });
   return rows;
 }
 
-/* Into the local copy first, so the row shows the change before the host answers; the host's
-   actions push then replaces the list with what it stored. */
-function saveAction(app, next) {
-  const list = app.actions || (app.actions = []);
-  const i = list.findIndex(x => x.id === next.id);
-  if (i >= 0) list[i] = next; else list.push(next);
-  send({ cmd: "actionUpdate", appId: app.id, action: next });
-  renderSettings();
+/* The choice sheet is drawn UNDER the form sheet (overlays stack in document order), so the form
+   steps aside while a list is open and comes back on the same row afterwards. */
+function acFromForm(open) {
+  const id = acEditingId, idx = formState ? formState.idx : 0;
+  closeForm();
+  open(() => { if (acFind(id)) acEdit(id, idx); });
 }
 
-function newActionId() {
-  return "c" + Math.random().toString(16).slice(2, 10);
+function acConfirmRemove(a) {
+  const app = acApp();
+  askConfirm(a.custom
+    ? { title: `Delete “${a.name}”?`, body: "It is an action you made, so it is gone for good.", yesLabel: "Delete", icon: "trash", danger: true, onYes: () => acRemove(a.id) }
+    : { title: `Take “${a.name}” off the wheel?`, body: `${a.button ? "Its button stops working too. " : ""}It can be added back with the + spoke${app ? `, under ${app.name}'s own` : ""}.`, yesLabel: "Remove", icon: "trash", danger: true, onYes: () => acRemove(a.id) });
 }
 
-/* Name, then shortcut, then the editor with the button row lit. Backing out of either prompt
-   makes nothing. */
-function startAddAction(app) {
+function acRemove(id) {
+  const f = acFind(id), app = acApp();
+  if (!f || !app) return;
+  if (formState && formState.kind === "action") closeForm();
+  f.tab.items.splice(f.index, 1);
+  if (!f.item.custom) (app.spare || (app.spare = [])).push(f.item);
+  send({ cmd: "actionRemove", appId: app.id, actionId: id });
+  settingsIdx = Math.max(0, f.index - (f.index >= f.tab.items.length ? 1 : 0));
+  if (acActive()) renderSettings();
+}
+
+function acPickTab(a, back) {
+  const here = acFind(a.id);
+  const max = actionsMaxItems();
+  const items = acTabs().filter(t => !here || t.id !== here.tab.id).map(t => {
+    const full = (t.items || []).length >= max;
+    return {
+      label: t.name, icon: "apps", sub: full ? "Full" : `${(t.items || []).length} of ${max}`,
+      action: () => {
+        if (full) { toast(`${t.name} is full: a tab holds ${max}`); back(); return; }
+        const f = acFind(a.id);
+        if (!f) return;
+        f.tab.items.splice(f.index, 1);
+        t.items = t.items || [];
+        t.items.push(f.item);
+        acUi.tab = acTabs().indexOf(t);
+        settingsIdx = t.items.length - 1;
+        send({ cmd: "actionMove", appId: actionsUi.appId, actionId: a.id, tabId: t.id, index: t.items.length - 1 });
+        if (acActive()) renderSettings();
+        back();
+      },
+    };
+  });
+  openChoice("Move to", items, { onBack: back });
+}
+
+/* ---- adding one ---- */
+
+/* The + spoke. With the pack's own actions off the wheel there is a list -- a new one, or one of
+   those back -- else straight to the name. */
+function acStartAdd(tab) {
+  const app = acApp();
+  if (!app || !tab) return;
+  if ((tab.items || []).length >= actionsMaxItems()) { toast(`A tab holds ${actionsMaxItems()}. X opens the tab's options, to add another`); return; }
+  const spare = app.spare || [];
+  if (!spare.length) { acNewAction(tab, null); return; }
+  const again = () => acStartAdd(tab);
+  openChoice("Add an action", [
+    { label: "A new action", icon: "plus", sub: "A name, then the keyboard shortcut to send", action: () => acNewAction(tab, again) },
+    { cat: `${app.name.toUpperCase()}'S OWN, OFF THE WHEEL` },
+    ...spare.map(a => ({
+      label: a.name, icon: a.danger ? "trash" : "bolt",
+      sub: (a.keys ? splitKeys(a.keys).map(keyLabel).join(" + ") : "No shortcut") + (a.desc ? " · " + a.desc : ""),
+      action: () => acPlace(tab, { ...a }),
+    })),
+  ]);
+}
+
+/* Name, then shortcut, then the edit sheet on the button row. Backing out of either prompt makes
+   nothing (and goes back to the list it came from, if any). */
+function acNewAction(tab, back) {
   openInput("ACTION NAME", "", name => {
-    if (!name) return;
+    if (!name) { if (back) back(); return; }
     openKeyPick("", keys => {
-      const a = { id: newActionId(), name, keys, button: null, hidden: false, custom: true, danger: false };
-      (app.actions || (app.actions = [])).push(a);
-      send({ cmd: "actionUpdate", appId: app.id, action: a });
-      enterActionsEditor(app.id, a.id, 2);
+      const a = { id: actionNewId(), name, keys, button: null, custom: true, danger: false, edited: false };
+      acPlace(tab, a);
+      acEdit(a.id, AC_ROW_BUTTON);
     }, `SHORTCUT FOR ${name.toUpperCase()}`);
   });
+}
+
+/* At the + spoke's place (the end of the tab), in the page's copy first. */
+function acPlace(tab, a) {
+  const app = acApp();
+  if (!app) return;
+  if ((tab.items || []).length >= actionsMaxItems()) { toast(`${tab.name} is full: a tab holds ${actionsMaxItems()}`); return; }
+  tab.items = tab.items || [];
+  tab.items.push(a);
+  app.spare = (app.spare || []).filter(x => x.id !== a.id);
+  send({ cmd: "actionUpdate", appId: app.id, action: acWire(a), tabId: tab.id, index: tab.items.length - 1 });
+  if (acActive()) {
+    settingsPane = "rows";
+    settingsIdx = tab.items.length - 1;
+    renderSettings();
+    pulse(document.querySelector(".sc-ring"));
+  }
+}
+
+/* ---- the host's messages ---- */
+
+/* The actions list, from an actions message or a state push. One that lands while an action is
+   picked up waits until it is put down, or it would put the wheel back under the hand. `quiet` is
+   the state push, which repaints everything itself. */
+function onActionsData(data, quiet) {
+  if (!data) return;
+  if (acUi.moving) { acUi.pending = withActionIcons(data, acUi.pending || S.actions); return; }
+  S.actions = withActionIcons(data, S.actions);
+  if (quiet) return;
+  if (view === "settings" && settingsTab === "actions") renderSettings();
+  if (formState && formState.kind === "action") renderForm();
+  refreshActionWheel();
+}
+
+function acApplyPending() {
+  if (!acUi.pending) return;
+  S.actions = acUi.pending;
+  acUi.pending = null;
 }
 
 /* "Add an app": the windows open right now, by program, then the file dialog. The host answers
@@ -583,12 +814,12 @@ function onActionApps(m) {
   openChoice("Add an app", items);
 }
 
-/* The host added it (or found it already there): open its list. Null is a cancelled dialog. */
+/* The host added it (or found it already there): open its wheel. Null is a cancelled dialog. */
 function onActionAppAdded(m) {
   if (!m.id) return;
   if (m.existed) toast("Already listed");
   settingsTab = "actions";
-  enterActionsApp(m.id, 0);
+  enterActionsApp(m.id);
 }
 
 function askConfirm(state) {
@@ -623,12 +854,13 @@ function actionsTileHtml(row) {
     return `<div class="app-icon app-add">${iconSvg("plus")}</div><div class="app-name">Add an app</div><div class="app-sub">Open now, or browse</div>`;
   }
   const app = row.app;
-  const list = app.actions || [];
+  const list = appActions(app);
   const bound = list.filter(a => a.button).length;
+  const tabs = (app.tabs || []).length;
   const icon = app.id === EVERYWHERE_ID ? `<div class="app-icon app-glyph">${iconSvg("globe")}</div>`
     : app.icon ? `<div class="app-icon" style="background-image:url('${app.icon}')"></div>`
     : `<div class="app-icon app-mono"><span>${esc((app.name || "?").trim().charAt(0).toUpperCase())}</span></div>`;
-  const sub = app.id === EVERYWHERE_ID ? "In every app"
+  const sub = app.id === EVERYWHERE_ID ? `In every app · ${tabs} tab${tabs === 1 ? "" : "s"}`
     : `${list.length} action${list.length === 1 ? "" : "s"}${bound ? ` · ${bound} on a button` : ""}`;
   return `${icon}<div class="app-name">${esc(app.name)}</div><div class="app-sub">${esc(sub)}</div>`;
 }
@@ -637,8 +869,10 @@ function actionsTileHtml(row) {
 
 const CAPTURE_TIMEOUT_MS = 15000;
 
-function openCapture(app, action, onDone) {
-  captureState = { app, action, onDone, timer: null, note: null };
+/* `check` is what refuses a combo, when the caller has its own rules (a Power Wheel shortcut's
+   button, shortcuts.js); the default is the action's own bindingBlock. */
+function openCapture(app, action, onDone, check) {
+  captureState = { app, action, onDone, check: check || null, timer: null, note: null };
   renderCapture();
   showOverlay("overlay-capture");
   send({ cmd: "actionCapture" });
@@ -677,7 +911,7 @@ function cancelCapture(reason) {
 function onActionCaptured(combo) {
   if (!captureState) return;
   if (!combo) { cancelCapture(null); return; }
-  const block = bindingBlock(captureState.app, captureState.action, combo);
+  const block = captureState.check ? captureState.check(combo) : bindingBlock(captureState.app, captureState.action, combo);
   if (block) {
     captureState.note = block;
     renderCapture();

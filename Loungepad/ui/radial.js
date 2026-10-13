@@ -8,7 +8,7 @@
  */
 
 let radialOpen = false, radialIdx = 0;
-let radialSub = null, radialSubIdx = 0;     // null | "windows" | "shortcuts"
+let radialSub = null, radialSubIdx = 0;     // null | "windows"
 let ingameOpen = false, ingameIdx = 0;
 let overlayTargetTitle = "";
 let hostWindows = [];
@@ -23,8 +23,9 @@ const RADIAL_ITEMS = [
     desc: "Shortcuts for the app in front, and for everywhere" },
   { id: "windows",     label: "Switch window", icon: "viewBtn",
     desc: "Pick another open window and bring it to the TV" },
+  /* A wheel of the user's own: apps, folders, websites, games, commands. See shortcuts.js. */
   { id: "shortcuts",   label: "Shortcuts",     icon: "apps",
-    desc: "File Explorer, Settings and friends" },
+    desc: "Your apps, folders, sites and games, a tab to a wheel" },
   { id: "keyboard",    label: "Keyboard",      icon: "keyboard",
     desc: "Show or hide the on-screen keyboard" },
   { id: "centerMouse", label: "Center mouse",  icon: "pointer",
@@ -44,23 +45,6 @@ const RADIAL_ITEMS = [
    0: that one closes a window, and A on a menu you have only just opened should not be able
    to destroy something by default. Spoke 1 is Actions, the one most worth a single press. */
 const RADIAL_HOME = 1;
-
-/* No Task Manager (the user's call, Oct 9 2026): it runs as administrator, and Windows keeps an
-   ordinary program's pointer and clicks out of an administrator's window, so without the input
-   service the stick did nothing on it and that read as a bug. */
-const SHORTCUTS = [
-  { id: "explorer",        label: "File Explorer",    icon: "folder" },
-  { id: "settings",        label: "Windows Settings", icon: "gear" },
-  { id: "displaySettings", label: "Display Settings", icon: "monitor" },
-  { id: "volume",          label: "Volume Mixer",     icon: "volume" },
-  // Distinct from Rest, which only blanks the screen: this hands the session to the Windows
-  // lock screen, which the pad cannot drive at all.
-  { id: "lock",            label: "Lock PC",          icon: "lock" },
-  // Rest first (the game frozen, the pad parked), then Windows' own sleep. The host answers
-  // this id itself rather than running a program; what can wake the PC afterwards is in
-  // Settings → General → Rest and sleep.
-  { id: "sleepPc",         label: "Sleep PC",         icon: "power" },
-];
 
 /** Close every transient menu so an overlay never stacks on a stale one. */
 function closeAllMenus() {
@@ -225,7 +209,7 @@ function radialActivate() {
       setInputMode("pointer");    // tells the host too, so its copy stays in step
       break;
     case "windows":   openRadialSub("windows"); break;
-    case "shortcuts": openRadialSub("shortcuts"); break;
+    case "shortcuts": openShortcutWheel(); break;
     case "actions":   openActionWheel(); break;
   }
 }
@@ -253,12 +237,6 @@ function radialSubItems() {
       action: () => { send({ cmd: "windowAction", action: "focus", handle: w.handle }); closeRadial(false); },
     }));
   }
-  if (radialSub === "shortcuts") {
-    return SHORTCUTS.map(s => ({
-      label: s.label, icon: s.icon,
-      action: () => { send({ cmd: "shortcut", id: s.id }); closeRadial(false); },
-    }));
-  }
   return [];
 }
 
@@ -275,7 +253,7 @@ function openRadialSub(kind) {
 function renderRadialSub() {
   const items = radialSubItems();
   radialSubIdx = Math.max(0, Math.min(radialSubIdx, items.length - 1));
-  $("radialSubTitle").textContent = radialSub === "windows" ? "SWITCH WINDOW" : "SHORTCUTS";
+  $("radialSubTitle").textContent = "SWITCH WINDOW";
   renderMenu($("radialSubList"), $("radialSubFoot"), items, radialSubIdx,
     foot(["A", "Select"], ["B", "Back"]),
     (i) => { if (radialSubIdx !== i) { radialSubIdx = i; renderRadialSub(); } },
@@ -374,8 +352,8 @@ function ingameInput(btn) {
 }
 /** Host asked us to tear down any overlay menu (e.g. the combo was tapped while one was open). */
 function dismissOverlays() {
-  radialOpen = false; radialSub = null; ingameOpen = false; actionWheelOpen = false;
-  ["overlay-radial", "overlay-radialsub", "overlay-actions", "overlay-ingame"]
+  radialOpen = false; radialSub = null; ingameOpen = false; actionWheelOpen = false; shortcutWheelOpen = false;
+  ["overlay-radial", "overlay-radialsub", "overlay-actions", "overlay-shortcuts", "overlay-ingame"]
     .forEach(hideOverlay);
   closeAllMenus();
   setOverlayMode(false);
