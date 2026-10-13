@@ -586,6 +586,15 @@ Stop the scrolled grid from clipping through the All games header
   drops it, without a `closeOverlay` that would hand the foreground back to a game being asked to
   quit. Opened from the in-game menu's Power Wheel tile there is no new push, so the flag from the
   `ingame` push carries over.
+- **The Power Wheel's joystick-mouse spoke is the global switch** (`GamepadMouseEnabled`, the
+  `joystickMouse` command; the user's ask, Oct 13 2026). It used to flip only
+  `GamepadMouseDuringGame`, which is now a Settings-only row for games with no pad support. The
+  label is what A will do ("Disable joystick mouse" while on), the icon and the description what
+  is in force. On, it still stands down while a game Loungepad launched is in front
+  (`serviceActive` in `GamepadService`). The switch is in the input service's profile, so off also
+  turns the pointer off over UAC prompts and the sign-in screen (the D-pad and Start still work
+  there), exactly as the Settings row always did; the handler calls `RefreshInputProfile` for it.
+  Checked over CDP against a Debug build: the host saves it, pushes it back and toasts.
 - `renderMenu` paints its highlight onto `listEl.closest("[data-focus-scope]")`. An overlay
   without that attribute gets no highlight at all — which is what was wrong with the power
   wheel's submenus. It also only paints rows that are focusable, and nothing inside a hidden

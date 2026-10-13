@@ -712,17 +712,19 @@ public class UiBridge
                 _window.CloseOverlay(false);
                 break;
 
-            case "mouseInGame":
+            case "joystickMouse":
             {
-                // Toggled from the Power Wheel rather than only from Settings: the moment you need
-                // it is mid-game, when walking to Settings means leaving the game to do it.
+                // The Power Wheel's switch for the stick as a mouse, everywhere: the same setting as
+                // Settings → Controller → Joystick mouse. The moment you want it off (or back) is
+                // usually over some other program, when walking to Settings means leaving it.
                 var st = _settings.Settings;
-                st.GamepadMouseDuringGame = msg["on"]?.GetValue<bool>() ?? !st.GamepadMouseDuringGame;
+                st.GamepadMouseEnabled = msg["on"]?.GetValue<bool>() ?? !st.GamepadMouseEnabled;
                 _settings.Save();
+                // The input service moves the pointer too, and on the secure desktops it is the only
+                // thing that does: it reads the switch from the profile.
+                _window.RefreshInputProfile();
                 PushState();
-                Push(new { type = "toast", message = st.GamepadMouseDuringGame
-                    ? "Gamepad mouse forced on while a game runs"
-                    : "Gamepad mouse off while a game runs" });
+                Push(new { type = "toast", message = st.GamepadMouseEnabled ? "Joystick mouse on" : "Joystick mouse off" });
                 break;
             }
 

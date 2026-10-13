@@ -30,8 +30,9 @@ const RADIAL_ITEMS = [
   { id: "centerMouse", label: "Center mouse",  icon: "pointer",
     desc: "Park the pointer in the middle of the TV" },
   /* Label and description are rewritten from the live setting in renderRadial: this one is a
-     toggle, and a spoke that cannot say which way it is currently set is a coin flip. */
-  { id: "mouseInGame", label: "Mouse in game", icon: "controller" },
+     toggle, and a spoke that cannot say which way it is currently set is a coin flip. The label
+     says what A will do, the icon and the description what is in force now. */
+  { id: "joystickMouse", label: "Joystick mouse", icon: "controller" },
   /* Rest mode (see RestService on the host): the screen off, the game frozen, and one press on the
      pad brings both back. Sleeping the PC itself is under Shortcuts, because whether the pad can
      wake it from THAT depends on the hardware. */
@@ -92,18 +93,19 @@ function closeRadial(refocus) {
   send({ cmd: "closeOverlay", refocus: refocus !== false });
 }
 
-/* The stick-as-mouse is off inside a focused game by default, so games with native pad support
-   never see phantom input. For the ones that have none it has to be switchable from where you
-   are -- in the game -- rather than from a settings screen you cannot reach without leaving. */
-function mouseInGameOn() { return !!(S.settings && S.settings.gamepadMouseDuringGame); }
+/* The stick as a mouse, everywhere: the same switch as Settings → Controller → Joystick mouse
+   (the user's ask, Oct 13 2026; the spoke used to flip only "Stay active while a game is
+   focused", which is Settings-only now). On, it still stands down by itself while a game
+   Loungepad launched is in front, and comes back when something else is. */
+function joystickMouseOn() { return !(S.settings && S.settings.gamepadMouseEnabled === false); }
 /* Distinct icon from "Center mouse", which also uses the pointer, and it flips with the state so
    the spoke reads at a glance from across the room. */
 function radialIcon(it) {
-  if (it.id !== "mouseInGame") return it.icon;
-  return mouseInGameOn() ? "controller" : "controllerOff";
+  if (it.id !== "joystickMouse") return it.icon;
+  return joystickMouseOn() ? "controller" : "controllerOff";
 }
 function radialLabel(it) {
-  if (it.id === "mouseInGame") return mouseInGameOn() ? "Mouse in game: On" : "Mouse in game: Off";
+  if (it.id === "joystickMouse") return joystickMouseOn() ? "Disable joystick mouse" : "Enable joystick mouse";
   // Opened over the running game, the window behind the menu IS the game, and the spoke should
   // say so: "Close window" over a game reads as something milder than it is.
   if (it.id === "close" && overlayTargetIsGame) return "Close game";
@@ -114,15 +116,19 @@ function radialLabel(it) {
   return it.label;
 }
 function radialDesc(it) {
-  if (it.id === "mouseInGame") return mouseInGameDesc();
+  if (it.id === "joystickMouse") return joystickMouseDesc();
   if (it.id === "close" && overlayTargetIsGame) return "Ask the game to quit and come back to the library";
   if (it.id === "close" && overlayOverLauncher) return "Close Loungepad. Start it again whenever you want it back";
   return it.desc || "";
 }
-function mouseInGameDesc() {
-  return mouseInGameOn()
-    ? "Stick keeps moving the pointer while a game is focused — press A to turn it off"
-    : "Force the stick to move the pointer even while a game is focused";
+function joystickMouseDesc() {
+  const s = S.settings || {};
+  if (!joystickMouseOn()) return "Off everywhere: the stick only drives Loungepad's menus";
+  // Over the running game the pointer is not moving right now, and the spoke should not claim it is.
+  if (overlayTargetIsGame && !s.gamepadMouseDuringGame) return "On, and paused while the game is in front";
+  return s.gamepadMouseDuringGame
+    ? "On: the stick moves the pointer, inside games too"
+    : "On: the stick moves the pointer, and stands down while a game is in front";
 }
 
 function renderRadial() {
@@ -153,7 +159,7 @@ function renderRadial() {
     el.className = "radial-item"
       + (i === radialIdx && focusVisible() ? " focused" : "")
       + (it.danger ? " danger" : "");
-    // Only the mouse-in-game spoke ever changes what it says; the rest are written once.
+    // Only the joystick-mouse and close spokes ever change what they say; the rest are written once.
     const html = iconSvg(radialIcon(it)) + "<span>" + esc(radialLabel(it)) + "</span>";
     if (el.__html !== html) { el.innerHTML = html; el.__html = html; }
   });
@@ -196,9 +202,9 @@ function radialActivate() {
     // Blanks the TV and parks the pad; any button brings it back, so it needs no confirm step.
     case "rest":      send({ cmd: "rest" });                             closeRadial(false); break;
     // Stays open so the flipped label is visible; the toast alone would be gone with the menu.
-    case "mouseInGame":
-      if (S.settings) S.settings.gamepadMouseDuringGame = !mouseInGameOn();
-      send({ cmd: "mouseInGame", on: mouseInGameOn() });
+    case "joystickMouse":
+      if (S.settings) S.settings.gamepadMouseEnabled = !joystickMouseOn();
+      send({ cmd: "joystickMouse", on: joystickMouseOn() });
       renderRadial();
       break;
     case "centerMouse":

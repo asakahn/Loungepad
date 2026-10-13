@@ -636,6 +636,14 @@ internal class GamepadService : IDisposable
                 continue;
             }
 
+            // The joystick mouse switched off (from the Power Wheel, often) with a click button still
+            // down. The release below only runs while it is on, so the button would stay down.
+            if (!s.GamepadMouseEnabled)
+            {
+                if (leftDown) { SendClick(NativeMethods.MOUSEEVENTF_LEFTUP); leftDown = false; }
+                if (rightDown) { SendClick(NativeMethods.MOUSEEVENTF_RIGHTUP); rightDown = false; }
+            }
+
             // Only D-pad navigation means "the pad is driving". A face button must not re-arm a
             // highlight the pointer has cleared, or pressing A over empty space would activate
             // whatever was last hovered.

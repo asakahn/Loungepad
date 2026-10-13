@@ -1093,9 +1093,12 @@ public partial class MainWindow : Window
     /// <summary>Re-apply the keyboard settings while it is up, so the size slider is live.</summary>
     public void RefreshBuiltinKeyboard()
     {
-        _serviceInput.UpdateProfile(_settings.Settings);
+        RefreshInputProfile();
         if (_kb is { IsVisible: true }) ShowBuiltinKeyboard();
     }
+
+    /// <summary>Hand the input service the settings it maps the pad by (the joystick mouse among them).</summary>
+    public void RefreshInputProfile() => _serviceInput.UpdateProfile(_settings.Settings);
 
     private void HideBuiltinKeyboard()
     {
