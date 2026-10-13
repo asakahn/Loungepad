@@ -41,6 +41,14 @@ Stop the scrolled grid from clipping through the All games header
   `SetForegroundWindow` from PowerShell is often refused, and the keys then go to whatever the
   user has open -- a held-arrow test once scrolled the user's browser. Take the foreground with
   `AttachThreadInput` + `BringWindowToTop` + `SetForegroundWindow`, verify, and abort if lost.
+- **The user tests dev builds, one after every change** (their ask, Oct 13 2026):
+  `tools\dev-build.ps1` publishes the release's single-file exe, unsigned, to
+  `dist\v<version>-<branch>\Loungepad.exe` with a `dev-build.txt` (commit, time, fingerprint) beside
+  it. A Stop hook in `.claude\settings.local.json` runs it with `-IfChanged -Hook` at the end of every
+  turn: ~0.4 s when nothing under Loungepad\, Loungepad.Input\ or release-notes\ changed, ~20 s when
+  something did. A failed build blocks the turn once with the compiler errors. A running copy is set
+  aside as `*.loungepad-old` (the updater's own suffix, cleaned on the next start) rather than
+  killed. Say where the build is when a change is done.
 - For anything touching input, focus, the cursor or window behaviour, run the
   published app: `publish\Loungepad.exe --windowed` gives a 1280x720
   non-topmost window. Drive it with real `SendInput` and screen captures.
@@ -586,6 +594,21 @@ Stop the scrolled grid from clipping through the All games header
   drops it, without a `closeOverlay` that would hand the foreground back to a game being asked to
   quit. Opened from the in-game menu's Power Wheel tile there is no new push, so the flag from the
   `ingame` push carries over.
+- **The Power Wheel's joystick-mouse spoke follows the window it opened over** (the `joystickMouse`
+  command; the user's asks, Oct 13 2026). Over a game the mouse stands down for
+  (`MainWindow.OverlayOverGame`: the running game itself, not its launcher, or Big Picture or a
+  Steam game while Steam owns the pad -- what the pad loop's isGameFocused names) it is the stick
+  IN THAT GAME: `GamepadService.MouseInGame`, null on every launch (`OnGameStarted`) so each game
+  starts with the pad to itself, and `serviceActive` reads `MouseInGameNow` (the override, else
+  `GamepadMouseDuringGame`, now a Settings-only row). Anywhere else it is the global switch,
+  `GamepadMouseEnabled`, the same as Settings → Controller → Joystick mouse. The first cut was the
+  global switch everywhere, and over ULTRAKILL it said "Disable" while the mouse was off and
+  pressing it changed nothing there (the user's report). `PushOverlay` carries `gameMouse` (null
+  off a game) and the host answers a press with a `joystickMouse` message; the label is what A will
+  do, the icon and description what is in force. Turning it on in a game turns the global switch
+  on too. The global switch is in the input service's profile, so off also turns the pointer off
+  over UAC prompts and the sign-in screen (the D-pad and Start still work there), as the Settings
+  row always did; the handler calls `RefreshInputProfile` for it.
 - `renderMenu` paints its highlight onto `listEl.closest("[data-focus-scope]")`. An overlay
   without that attribute gets no highlight at all — which is what was wrong with the power
   wheel's submenus. It also only paints rows that are focusable, and nothing inside a hidden
@@ -1326,7 +1349,7 @@ Stop the scrolled grid from clipping through the All games header
   for a game that restarts itself. The poll is every 250 ms, not 1.5 s.
 - **A close that finds nothing of the game ends the session** (`GameLaunchService.Abandon`, Oct 3
   2026, the user's ask). A store launch that goes nowhere -- 1000xRESIST on Oct 3: no process in
-  its folder ever appeared -- sat in `WaitForProcessFromDir`'s two-minute wait with the card saying
+  its folder ever appeared -- sat in the two-minute wait for a process (now `WaitForGameProcess`) with the card saying
   RUNNING NOW, "Close game" answering "No game window to close" and a swap refusing with "Could not
   find the running game to close", for the whole two minutes plus the 20 s "assuming it exited"
   delay. Every wait the session makes now takes a per-session token; `RequestClose(out foundAny)`
@@ -1340,6 +1363,42 @@ Stop the scrolled grid from clipping through the All games header
   copy of cmd.exe: 12 checks, the abandoned close ending the session in 62 ms where the grace was
   15 s. The 120 s URI wait itself is the same cancellable wait and was not exercised (no URI
   launch without a store client).
+- **A game's processes are a tree, not a folder** (`SessionProcesses`, Oct 13 2026; the user's
+  report: Prism Launcher). Membership was "exe inside the session folder", so Prism (a manual
+  game, its folder the session's) counted as the game and the javaw.exe it starts out of a Java
+  runtime folder did not: the stick was dead over Prism and a mouse over Minecraft, on top of its
+  controller mod. Now a process is the game's when it is in the folder, is the one Loungepad
+  started (`Seed`, start time checked), or was started by one that is, at any depth -- each link
+  checked against start times, since pids are reused, and an exited member is remembered for 60 s
+  so its late-seen child still links. `NeverAdopted` keeps out what a game may start but does not
+  own (Steam, store clients, browsers, Explorer, overlay helpers): adopted, they held the session
+  open and lost the pointer over the browser. Anything in the Windows folder is a relay, never a
+  member (`Relay`): Notepad opened on a readme stays out, while a launcher that runs the game
+  through cmd still gets its game adopted. Close, pause, the TV monitor, the stats and the
+  session's lifetime all take the whole tree.
+- **Only the joystick mouse tells the launcher from the game** (`IsGameForeground` →
+  `SessionProcesses.IsGame`). A launcher is on `KnownLaunchers` (Prism, MultiMC, the Minecraft
+  Launcher, REDlauncher, Bethesda's per-game launchers...) or has a child of the game with a
+  game-sized window open RIGHT NOW (`Hosting`; consoles, dialogs, tool, click-through and
+  no-activate windows never count). Not sticky: a game that opens a windowed child of its own is
+  only mouse-on while that window is up. A child that has ever hosted the game's window
+  (`LaunchedGame`) does not keep the session open, or a launcher a game starts from outside its
+  folder (Rockstar's, from PlayGTAV) would hold it open from the tray forever. Window classes were
+  rejected as a launcher test: RPG Maker MV/MZ and other NW.js games are Chrome_WidgetWin_1 and
+  read the pad themselves.
+- **A refresh is a process snapshot, ~5 ms on this PC** (Toolhelp walks the same
+  NtQuerySystemInformation as `Process.SessionId`; see the input service notes). `FollowAsync` runs
+  it every 250 ms for 30 s after the start or after anything joins, else every second, and the
+  window pass only runs when a member has a member parent, only for those. The pad loop never waits
+  for it: an unknown foreground pid is looked up on the spot (`NtQueryInformationProcess` for its
+  parent). Checked with scratch harnesses over renamed copies of a tiny WinForms stand-in (windows
+  drawn off-screen, shown without activation): `sp-harness`, 42 checks on the class itself (chains,
+  known and unknown launchers, never-adopted, outsiders, no folder, a game started through the real
+  cmd.exe, cost), and `sp-launch`, 11
+  through a real `GameLaunchService` session with unloaded settings and a scratch library (the
+  session follows javaw after Prism exits and ends 15 s after it; Close game reaches javaw). The
+  game window there is minimized so `FocusGameWindowAsync` takes no foreground. Not yet seen with
+  the real Prism and Minecraft.
 
 ## Emulators and ROMs
 
@@ -1377,8 +1436,8 @@ Stop the scrolled grid from clipping through the All games header
 - **The session folder for a ROM is the emulator's folder**, not the ROM's (`SessionDir` in
   `GameLaunchService`): the emulator is the process that runs, gets moved to the TV and is closed
   by the in-game menu. Which is why a stand-in emulator for a test must NOT be a System32 program:
-  `PidBelongsToGame` would claim every svchost and the session would never end. The harness copies
-  cmd.exe into a scratch folder instead.
+  the folder rule in `SessionProcesses` would claim every svchost and the session would never end.
+  The harness copies cmd.exe into a scratch folder instead.
 - Arguments are a template with `{rom}`, `{romdir}`, `{romname}`, `{romfile}`, `{core}`, `{emudir}`,
   three layers that REPLACE each other (game > folder > emulator), and quoting is the template's
   job so MAME's unquoted set name is possible. A template with no `{rom` gets `"{rom}"` appended,

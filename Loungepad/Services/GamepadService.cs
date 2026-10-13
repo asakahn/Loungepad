@@ -103,6 +103,21 @@ internal class GamepadService : IDisposable
     /// </summary>
     public volatile bool KeyboardOwnsPad;
 
+    private int _mouseInGame = -1;
+    /// <summary>
+    /// The joystick mouse inside a focused game, as the Power Wheel last set it over one: null
+    /// follows "Stay active while a game is focused". Cleared when Loungepad launches a game, so
+    /// every game starts with the stick left to it (the user's ask, Oct 13 2026).
+    /// </summary>
+    public bool? MouseInGame
+    {
+        get => Volatile.Read(ref _mouseInGame) switch { 0 => false, 1 => true, _ => null };
+        set => Volatile.Write(ref _mouseInGame, value is null ? -1 : value.Value ? 1 : 0);
+    }
+
+    /// <summary>Whether the pad stays a mouse while a game is focused, right now.</summary>
+    public bool MouseInGameNow(AppSettings s) => MouseInGame ?? s.GamepadMouseDuringGame;
+
     /// <summary>A direction or button for the on-screen keyboard while it owns the pad.</summary>
     public event Action<string>? KeyboardInput;
 
@@ -473,7 +488,7 @@ internal class GamepadService : IDisposable
             bool launcherFg = _isLauncherForeground();
             // The keyboard needs the cursor alive even inside a game: pointing at a key is one
             // of the two ways to drive it.
-            bool serviceActive = !gameFocused || s.GamepadMouseDuringGame || KeyboardOwnsPad;
+            bool serviceActive = !gameFocused || MouseInGameNow(s) || KeyboardOwnsPad;
 
             ushort buttons = state.Gamepad.wButtons;
             ushort pressed = (ushort)(buttons & ~prevButtons);
@@ -634,6 +649,14 @@ internal class GamepadService : IDisposable
                 Actions?.ResetBindings();
                 PushUiScroll(0, now);
                 continue;
+            }
+
+            // The joystick mouse switched off (from the Power Wheel, often) with a click button still
+            // down. The release below only runs while it is on, so the button would stay down.
+            if (!s.GamepadMouseEnabled)
+            {
+                if (leftDown) { SendClick(NativeMethods.MOUSEEVENTF_LEFTUP); leftDown = false; }
+                if (rightDown) { SendClick(NativeMethods.MOUSEEVENTF_RIGHTUP); rightDown = false; }
             }
 
             // Only D-pad navigation means "the pad is driving". A face button must not re-arm a

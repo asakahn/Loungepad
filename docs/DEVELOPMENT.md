@@ -66,6 +66,8 @@ Loungepad/
   Services/
     DisplayService.cs     Monitor enumeration + primary-display switching (ChangeDisplaySettingsEx)
     GameLaunchService.cs  Launch orchestration, process tracking, window repositioning, playtime
+    SessionProcesses.cs   A running game's processes: its folder's, the one started, and their
+                          children, with the launcher told apart from the game for the joystick mouse
     LibraryScanner.cs     Steam (ACF/VDF + librarycache art), Epic (.item manifests),
                           GOG (registry), Xbox (MicrosoftGame.config + AppModel repository),
                           ROM folders (one system per folder, see Models/Emulation.cs)

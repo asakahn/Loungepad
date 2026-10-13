@@ -1546,6 +1546,7 @@ let keyPick = null;                      // { onDone, mods: Set }
 let overlayTargetProcess = "";           // the exe behind the window a menu opened over; "" for none
 let overlayTargetIsGame = false;         // that window is the running game's (the wheel's Close spoke)
 let overlayOverLauncher = false;         // opened over Loungepad itself: the Close spoke exits Loungepad
+let overlayGameMouse = null;             // opened over a game: is the stick a mouse in it (null: not over a game)
 /* Settings → Add-ons' level (addons.js), declared here for the same reason as the actions state. */
 let addonsUi = { level: "grid", kind: "theme", key: null, sort: "az" };
 // The sheets and the screen activity.js draws. Declared here rather than there for the same
@@ -3834,9 +3835,10 @@ function allSettingsRows() {
     () => s.keepFocus, v => set(() => s.keepFocus = v)));
 
   rows.push({ section: "GAMEPAD", cat: "input" });
-  rows.push(toggleRow("Gamepad mouse", "Left stick moves the cursor; right stick scrolls",
+  // The same switch as the Power Wheel's "Enable / Disable joystick mouse" spoke.
+  rows.push(toggleRow("Joystick mouse", "Left stick moves the cursor; right stick scrolls. Also on the Power Wheel",
     () => s.gamepadMouseEnabled, v => set(() => s.gamepadMouseEnabled = v)));
-  rows.push(toggleRow("Stay active while a game is focused", "The gamepad-mouse always works when a game is running but not focused; this keeps it alive inside the game too (off avoids fighting native controller support)",
+  rows.push(toggleRow("Stay active while a game is focused", "The joystick mouse always works when a game is running but not focused; this keeps it alive inside the game too (off avoids fighting native controller support). The Power Wheel turns it on or off for the game in front",
     () => s.gamepadMouseDuringGame, v => set(() => s.gamepadMouseDuringGame = v)));
   rows.push(sliderRow("Stick deadzone", () => s.deadzone, 0.05, 0.40, 0.01, v => set(() => s.deadzone = v), v => v.toFixed(2)));
   rows.push(sliderRow("Cursor sensitivity", () => s.sensitivity, 0.2, 3.0, 0.1, v => set(() => s.sensitivity = v), v => v.toFixed(1) + "×"));
@@ -6348,7 +6350,7 @@ $("libSearch").addEventListener("mouseenter", () => { if (hoverEnabled() && !sea
 const GUIDE_STEPS = [
   ["Sign in from the couch: set up a Windows Hello PIN", "Apps cannot type into the secure lock screen, but you don't need one: in <b>Settings → Accounts → Sign-in options</b>, add a <b>PIN (Windows Hello)</b>. The sign-in screen's PIN pad works with the touch keyboard, which supports gamepad input — so after a wake you can sign in without leaving the sofa. For a fully hands-off couch PC, enable automatic sign-in instead (<b>netplwiz</b>, untick \"Users must enter a user name and password\")."],
   ["Rest instead of leaving the PC on", "<b>Settings → General → Rest and sleep</b> is a console's rest mode: after a stretch with nothing pressed the TV goes dark and the game is paused where it stands, and one press on any controller brings both back. Left resting, the PC goes to sleep. Whether the controller can wake it from <i>sleep</i> is up to its receiver's driver: the same rows list every device that could and allow it with one press. Where none can (a Bluetooth pad on most desktops), a wireless keyboard or mouse, or the power button, wakes it -- set “Then sleep the PC after” to a longer time, or keep the PC on, to suit."],
-  ["Auto-start Loungepad", "Turn on <b>Launch Loungepad at login</b> in Settings → Startup so the PC lands straight back on the TV with gamepad-mouse active after waking."],
+  ["Auto-start Loungepad", "Turn on <b>Launch Loungepad at login</b> in Settings → Startup so the PC lands straight back on the TV with the joystick mouse active after waking."],
 ];
 
 function renderGuide() {
@@ -6999,12 +7001,19 @@ function handleHostMessage(m) {
       overlayTargetProcess = m.targetProcess || "";
       overlayTargetIsGame = !!m.targetIsGame;
       overlayOverLauncher = !!m.overLauncher;
+      overlayGameMouse = typeof m.gameMouse === "boolean" ? m.gameMouse : null;
       setOverlayShot(m.shot);
       setOverlayMode(true);
       hostWindows = m.windows || [];
       if (m.runningGameId !== undefined) S.runningGameId = m.runningGameId;
       if (m.mode === "radial") openRadial(m.targetTitle);
       else if (m.mode === "ingame") openIngame();
+      break;
+    // The host's answer to the joystick-mouse spoke: what the stick now is in the game behind the
+    // menu (null when it is not over one; the global switch then rides the state push).
+    case "joystickMouse":
+      overlayGameMouse = typeof m.gameMouse === "boolean" ? m.gameMouse : null;
+      if (radialOpen) renderRadial();
       break;
     case "windows":
       hostWindows = m.windows || [];
@@ -7578,7 +7587,7 @@ if (!HOST) window.addEventListener("keydown", (e) => {
     mockHandle._running = hollow;
     const since = new Date(Date.now() - 72 * 60000).toISOString();
     handleHostMessage({ type: "game", running: true, id: hollow, since });
-    handleHostMessage({ type: "overlay", mode: "ingame", targetTitle: "Hollowmark", targetProcess: "hollowmark", targetIsGame: true, shot: null, windows: mockWindows, runningGameId: hollow });
+    handleHostMessage({ type: "overlay", mode: "ingame", targetTitle: "Hollowmark", targetProcess: "hollowmark", targetIsGame: true, gameMouse: false, shot: null, windows: mockWindows, runningGameId: hollow });
     clearInterval(mockHandle._telemetry);
     let tick = 0;
     const push = () => handleHostMessage({ type: "telemetry", id: hollow, since, sample: { t: 4320 + tick * 2, fps: 118 + Math.round(Math.sin(tick / 2) * 9), cpu: 41 + (tick % 5), gpu: 93 - (tick % 4), ram: 61, gpuTemp: 71, cpuTemp: 64 }, fpsSource: "RivaTuner Statistics Server", sensorSource: "HWiNFO" });

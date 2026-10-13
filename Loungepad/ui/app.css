@@ -1194,7 +1194,11 @@ body.pad-mode, body.pad-mode * { cursor: none !important; }
 }
 .radial-item .ov-icon { width: 34px; height: 34px; }
 .radial-item.focused .ov-icon { color: var(--accent); }
-.radial-item span { font-size: 19px; font-weight: 500; color: color-mix(in srgb, var(--ink) 82%, transparent); }
+/* Centred and a little tighter on two lines: "Disable joystick mouse" is wider than a spoke. */
+.radial-item span {
+  font-size: 19px; font-weight: 500; color: color-mix(in srgb, var(--ink) 82%, transparent);
+  text-align: center; line-height: 1.15; padding: 0 12px;
+}
 .radial-item.danger .ov-icon, .radial-item.danger span { color: var(--danger); }
 
 .radial-center {

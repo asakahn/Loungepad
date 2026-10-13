@@ -815,6 +815,8 @@ public partial class MainWindow : Window
 
     private void OnGameStarted()
     {
+        // Every game starts with the stick left to it; the Power Wheel can give it back.
+        _gamepad.MouseInGame = null;
         Park();
         _bridge?.PushGameState();
     }
@@ -964,7 +966,8 @@ public partial class MainWindow : Window
         _bridge?.PushOverlay(mode, _windows.TitleOf(_overlayTarget), shot,
             _overlayTargetLive ? ActionService.ExeOf(_overlayTarget) : "",
             _overlayTargetLive && _launcher.OwnsWindow(_overlayTarget),
-            overLauncher: !_overlayTargetLive);
+            overLauncher: !_overlayTargetLive,
+            gameMouse: GameMouseForTarget());
         await Task.Delay(90);
 
         _overlayActive = true;
@@ -973,6 +976,28 @@ public partial class MainWindow : Window
         // over nothing, which left A dead — the menu looked frozen.
         _gamepad.MenuOwnsStick = true;
         Unpark();
+    }
+
+    /// <summary>
+    /// The overlay opened over a window the joystick mouse stands down for: the running game
+    /// itself (not its launcher), or Big Picture or a Steam game while Steam owns the pad. The
+    /// same windows the pad loop's isGameFocused names.
+    /// </summary>
+    public bool OverlayOverGame =>
+        _overlayTargetLive && _overlayTarget != IntPtr.Zero
+        && (_launcher.IsGameWindow(_overlayTarget)
+            || (_settings.Settings.SteamOwnsPad && _steam.OwnerOf(_overlayTarget) is not null));
+
+    /// <summary>For the Power Wheel's joystick-mouse spoke: whether the stick is a mouse in the game
+    /// behind the menu, or null when the menu is not over one (the spoke is then the global switch).</summary>
+    public bool? GameMouseForTarget() =>
+        OverlayOverGame ? _settings.Settings.GamepadMouseEnabled && _gamepad.MouseInGameNow(_settings.Settings) : null;
+
+    /// <summary>The joystick mouse on or off in the game behind the menu, until the next launch.</summary>
+    public void SetMouseInGame(bool on)
+    {
+        _gamepad.MouseInGame = on;
+        Log.Info($"Joystick mouse {(on ? "on" : "off")} in the game in front, until the next launch");
     }
 
     /// <summary>Dismiss an overlay, putting the launcher back where it was.</summary>
@@ -1093,9 +1118,12 @@ public partial class MainWindow : Window
     /// <summary>Re-apply the keyboard settings while it is up, so the size slider is live.</summary>
     public void RefreshBuiltinKeyboard()
     {
-        _serviceInput.UpdateProfile(_settings.Settings);
+        RefreshInputProfile();
         if (_kb is { IsVisible: true }) ShowBuiltinKeyboard();
     }
+
+    /// <summary>Hand the input service the settings it maps the pad by (the joystick mouse among them).</summary>
+    public void RefreshInputProfile() => _serviceInput.UpdateProfile(_settings.Settings);
 
     private void HideBuiltinKeyboard()
     {
