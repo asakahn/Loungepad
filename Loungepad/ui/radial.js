@@ -93,11 +93,13 @@ function closeRadial(refocus) {
   send({ cmd: "closeOverlay", refocus: refocus !== false });
 }
 
-/* The stick as a mouse, everywhere: the same switch as Settings → Controller → Joystick mouse
-   (the user's ask, Oct 13 2026; the spoke used to flip only "Stay active while a game is
-   focused", which is Settings-only now). On, it still stands down by itself while a game
-   Loungepad launched is in front, and comes back when something else is. */
-function joystickMouseOn() { return !(S.settings && S.settings.gamepadMouseEnabled === false); }
+/* The stick as a mouse (the user's ask, Oct 13 2026). Over a game it is the stick in THAT game,
+   which stands the mouse down by itself until the spoke gives it back, until the next launch;
+   anywhere else it is the global switch, Settings → Controller → Joystick mouse. The label always
+   says what A will do there: over ULTRAKILL with the mouse stood down it said "Disable" and
+   flipped only the global switch, which changed nothing in the game. */
+function joystickMouseGlobal() { return !(S.settings && S.settings.gamepadMouseEnabled === false); }
+function joystickMouseOn() { return overlayGameMouse !== null ? overlayGameMouse : joystickMouseGlobal(); }
 /* Distinct icon from "Center mouse", which also uses the pointer, and it flips with the state so
    the spoke reads at a glance from across the room. */
 function radialIcon(it) {
@@ -122,11 +124,12 @@ function radialDesc(it) {
   return it.desc || "";
 }
 function joystickMouseDesc() {
-  const s = S.settings || {};
-  if (!joystickMouseOn()) return "Off everywhere: the stick only drives Loungepad's menus";
-  // Over the running game the pointer is not moving right now, and the spoke should not claim it is.
-  if (overlayTargetIsGame && !s.gamepadMouseDuringGame) return "On, and paused while the game is in front";
-  return s.gamepadMouseDuringGame
+  if (overlayGameMouse !== null)
+    return overlayGameMouse
+      ? "On in this game: the stick moves the pointer here too"
+      : "Off in this game, so it has the pad to itself. Turn it on to point and click here";
+  if (!joystickMouseGlobal()) return "Off everywhere: the stick only drives Loungepad's menus";
+  return S.settings && S.settings.gamepadMouseDuringGame
     ? "On: the stick moves the pointer, inside games too"
     : "On: the stick moves the pointer, and stands down while a game is in front";
 }
@@ -202,11 +205,16 @@ function radialActivate() {
     // Blanks the TV and parks the pad; any button brings it back, so it needs no confirm step.
     case "rest":      send({ cmd: "rest" });                             closeRadial(false); break;
     // Stays open so the flipped label is visible; the toast alone would be gone with the menu.
-    case "joystickMouse":
-      if (S.settings) S.settings.gamepadMouseEnabled = !joystickMouseOn();
-      send({ cmd: "joystickMouse", on: joystickMouseOn() });
+    case "joystickMouse": {
+      // Flipped here at once so the label turns over on the press; the host answers with what
+      // it did (a joystickMouse message, and a state push when the global switch moved).
+      const on = !joystickMouseOn();
+      if (overlayGameMouse !== null) overlayGameMouse = on;
+      if (S.settings && (overlayGameMouse === null || on)) S.settings.gamepadMouseEnabled = on;
+      send({ cmd: "joystickMouse", on });
       renderRadial();
       break;
+    }
     case "centerMouse":
       // host re-centres the pointer and closes the overlay; do not refocus the old window
       send({ cmd: "centerMouse" });

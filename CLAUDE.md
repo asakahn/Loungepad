@@ -594,15 +594,21 @@ Stop the scrolled grid from clipping through the All games header
   drops it, without a `closeOverlay` that would hand the foreground back to a game being asked to
   quit. Opened from the in-game menu's Power Wheel tile there is no new push, so the flag from the
   `ingame` push carries over.
-- **The Power Wheel's joystick-mouse spoke is the global switch** (`GamepadMouseEnabled`, the
-  `joystickMouse` command; the user's ask, Oct 13 2026). It used to flip only
-  `GamepadMouseDuringGame`, which is now a Settings-only row for games with no pad support. The
-  label is what A will do ("Disable joystick mouse" while on), the icon and the description what
-  is in force. On, it still stands down while a game Loungepad launched is in front
-  (`serviceActive` in `GamepadService`). The switch is in the input service's profile, so off also
-  turns the pointer off over UAC prompts and the sign-in screen (the D-pad and Start still work
-  there), exactly as the Settings row always did; the handler calls `RefreshInputProfile` for it.
-  Checked over CDP against a Debug build: the host saves it, pushes it back and toasts.
+- **The Power Wheel's joystick-mouse spoke follows the window it opened over** (the `joystickMouse`
+  command; the user's asks, Oct 13 2026). Over a game the mouse stands down for
+  (`MainWindow.OverlayOverGame`: the running game itself, not its launcher, or Big Picture or a
+  Steam game while Steam owns the pad -- what the pad loop's isGameFocused names) it is the stick
+  IN THAT GAME: `GamepadService.MouseInGame`, null on every launch (`OnGameStarted`) so each game
+  starts with the pad to itself, and `serviceActive` reads `MouseInGameNow` (the override, else
+  `GamepadMouseDuringGame`, now a Settings-only row). Anywhere else it is the global switch,
+  `GamepadMouseEnabled`, the same as Settings → Controller → Joystick mouse. The first cut was the
+  global switch everywhere, and over ULTRAKILL it said "Disable" while the mouse was off and
+  pressing it changed nothing there (the user's report). `PushOverlay` carries `gameMouse` (null
+  off a game) and the host answers a press with a `joystickMouse` message; the label is what A will
+  do, the icon and description what is in force. Turning it on in a game turns the global switch
+  on too. The global switch is in the input service's profile, so off also turns the pointer off
+  over UAC prompts and the sign-in screen (the D-pad and Start still work there), as the Settings
+  row always did; the handler calls `RefreshInputProfile` for it.
 - `renderMenu` paints its highlight onto `listEl.closest("[data-focus-scope]")`. An overlay
   without that attribute gets no highlight at all — which is what was wrong with the power
   wheel's submenus. It also only paints rows that are focusable, and nothing inside a hidden

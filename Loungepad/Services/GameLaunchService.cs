@@ -415,6 +415,15 @@ public class GameLaunchService
         return session.IsGame(pid);
     }
 
+    /// <summary>Is this window the running game itself, not its launcher? What IsGameForeground asks
+    /// of the foreground, asked of the window the Power Wheel opened over.</summary>
+    public bool IsGameWindow(IntPtr hwnd)
+    {
+        if (!GameRunning || hwnd == IntPtr.Zero || _session is not { } session) return false;
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+        return session.IsGame(pid);
+    }
+
     /// <summary>Does this window belong to the running game, launcher included? Used by the in-game menu.</summary>
     public bool OwnsWindow(IntPtr hwnd)
     {

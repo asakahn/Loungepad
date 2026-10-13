@@ -74,6 +74,17 @@ internal sealed class SteamForeground
         }
     }
 
+    /// <summary>The same question about a window that is not in front now: the one the Power Wheel
+    /// opened over. Not cached, and not logged.</summary>
+    public string? OwnerOf(IntPtr hwnd)
+    {
+        lock (_gate)
+        {
+            try { return Check(hwnd, Environment.TickCount64); }
+            catch (Exception) { return null; }
+        }
+    }
+
     private string? Check(IntPtr hwnd, long now)
     {
         if (hwnd == IntPtr.Zero) return null;

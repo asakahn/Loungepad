@@ -714,17 +714,30 @@ public class UiBridge
 
             case "joystickMouse":
             {
-                // The Power Wheel's switch for the stick as a mouse, everywhere: the same setting as
-                // Settings → Controller → Joystick mouse. The moment you want it off (or back) is
-                // usually over some other program, when walking to Settings means leaving it.
+                // The Power Wheel's joystick-mouse spoke. Over a game it is the stick in that game,
+                // which stands the mouse down by itself, until the next launch (MainWindow.
+                // SetMouseInGame); anywhere else it is the global switch, the same setting as
+                // Settings → Controller → Joystick mouse. A spoke that flipped only the global
+                // switch did nothing visible over a game, where the mouse was off either way (the
+                // user's report, Oct 13 2026, over ULTRAKILL).
                 var st = _settings.Settings;
-                st.GamepadMouseEnabled = msg["on"]?.GetValue<bool>() ?? !st.GamepadMouseEnabled;
-                _settings.Save();
-                // The input service moves the pointer too, and on the secure desktops it is the only
-                // thing that does: it reads the switch from the profile.
-                _window.RefreshInputProfile();
-                PushState();
-                Push(new { type = "toast", message = st.GamepadMouseEnabled ? "Joystick mouse on" : "Joystick mouse off" });
+                bool overGame = _window.OverlayOverGame;
+                bool on = msg["on"]?.GetValue<bool>() ?? !(_window.GameMouseForTarget() ?? st.GamepadMouseEnabled);
+                if (overGame) _window.SetMouseInGame(on);
+                // Turning it on in a game turns the switch on too: it is the same stick.
+                if (!overGame || (on && !st.GamepadMouseEnabled))
+                {
+                    st.GamepadMouseEnabled = on;
+                    _settings.Save();
+                    // The input service moves the pointer too, and on the secure desktops it is the
+                    // only thing that does: it reads the switch from the profile.
+                    _window.RefreshInputProfile();
+                    PushState();
+                }
+                Push(new { type = "joystickMouse", gameMouse = _window.GameMouseForTarget() });
+                Push(new { type = "toast", message = overGame
+                    ? (on ? "Joystick mouse on in this game" : "Joystick mouse off in this game")
+                    : (on ? "Joystick mouse on" : "Joystick mouse off") });
                 break;
             }
 
@@ -2993,7 +3006,8 @@ public class UiBridge
         _ => "Done"
     };
 
-    public void PushOverlay(string mode, string targetTitle, string? shot, string targetProcess, bool targetIsGame, bool overLauncher) =>
+    public void PushOverlay(string mode, string targetTitle, string? shot, string targetProcess, bool targetIsGame, bool overLauncher,
+        bool? gameMouse) =>
         Push(new
         {
             type = "overlay",
@@ -3008,6 +3022,9 @@ public class UiBridge
             // Opened over Loungepad itself: the Close spoke is "Exit Loungepad". The target title
             // is still the last window it acted on, which is not what is behind the menu now.
             overLauncher,
+            // Opened over a game the joystick mouse stands down for: whether it is a mouse in that
+            // game right now. Null anywhere else, where the spoke is the global switch.
+            gameMouse,
             shot,
             windows = _windows.ListWindows(),
             displays = _displays.GetDisplays(),
