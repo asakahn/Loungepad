@@ -41,6 +41,14 @@ Stop the scrolled grid from clipping through the All games header
   `SetForegroundWindow` from PowerShell is often refused, and the keys then go to whatever the
   user has open -- a held-arrow test once scrolled the user's browser. Take the foreground with
   `AttachThreadInput` + `BringWindowToTop` + `SetForegroundWindow`, verify, and abort if lost.
+- **The user tests dev builds, one after every change** (their ask, Oct 13 2026):
+  `tools\dev-build.ps1` publishes the release's single-file exe, unsigned, to
+  `dist\v<version>-<branch>\Loungepad.exe` with a `dev-build.txt` (commit, time, fingerprint) beside
+  it. A Stop hook in `.claude\settings.local.json` runs it with `-IfChanged -Hook` at the end of every
+  turn: ~0.4 s when nothing under Loungepad\, Loungepad.Input\ or release-notes\ changed, ~20 s when
+  something did. A failed build blocks the turn once with the compiler errors. A running copy is set
+  aside as `*.loungepad-old` (the updater's own suffix, cleaned on the next start) rather than
+  killed. Say where the build is when a change is done.
 - For anything touching input, focus, the cursor or window behaviour, run the
   published app: `publish\Loungepad.exe --windowed` gives a 1280x720
   non-topmost window. Drive it with real `SendInput` and screen captures.
