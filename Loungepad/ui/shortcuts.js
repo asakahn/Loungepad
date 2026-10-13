@@ -843,13 +843,13 @@ function scBindingIssues(it, combo) {
   const issues = bindingIssues(null, null, combo);
   if (!comboParts(combo).length) return issues;
   const twin = scAllItems().find(x => x.id !== it.id && comboEq(x.button, combo));
-  if (twin) issues.push({ level: "block", text: `The shortcut “${esc(twin.name)}” already uses that button. Pick another, or clear it there first.` });
+  if (twin) issues.push({ level: "block", text: `The shortcut “${twin.name}” already uses that button. Pick another, or clear it there first.` });
   const ev = everywhereApp();
   const evHit = appActions(ev).find(a => comboEq(a.button, combo));
-  if (evHit) issues.push({ level: "block", text: `Everywhere's “${esc(evHit.name)}” already uses that button (Settings › Actions). Pick another.` });
+  if (evHit) issues.push({ level: "block", text: `Everywhere's “${evHit.name}” already uses that button (Settings › Actions). Pick another.` });
   const apps = shownApps().filter(a => a.id !== EVERYWHERE_ID)
     .map(a => ({ a, hit: appActions(a).find(x => comboEq(x.button, combo)) })).filter(x => x.hit);
-  if (apps.length) issues.push({ level: "note", text: `In ${apps.slice(0, 2).map(x => esc(x.a.name)).join(" and ")}${apps.length > 2 ? " and others" : ""}, their own action takes this button while they are in front.` });
+  if (apps.length) issues.push({ level: "note", text: `In ${apps.slice(0, 2).map(x => x.a.name).join(" and ")}${apps.length > 2 ? " and others" : ""}, their own action takes this button while they are in front.` });
   return issues;
 }
 function scBindingBlock(it, combo) { const i = scBindingIssues(it, combo).find(x => x.level === "block"); return i ? i.text : null; }

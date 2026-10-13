@@ -160,22 +160,22 @@ function bindingIssues(app, action, combo) {
 
   const left = canonBtn(s.leftClickButton || "A"), right = canonBtn(s.rightClickButton || "B");
   if (single && (single === left || single === right) && !(single === "A" || single === "B"))
-    issues.push({ level: "warn", text: `${say(single)} is the ${single === left ? "left" : "right"} click button. ${app ? `In ${esc(app.name)} it` : "It"} fires this instead of clicking.` });
+    issues.push({ level: "warn", text: `${say(single)} is the ${single === left ? "left" : "right"} click button. ${app ? `In ${app.name} it` : "It"} fires this instead of clicking.` });
 
   if (app) {
     const twin = appActions(app).find(a => a !== action && a.id !== (action && action.id) && comboEq(a.button, combo));
-    if (twin) issues.push({ level: "block", text: `${esc(twin.name)} already uses that button here. Pick another, or clear it there first.` });
+    if (twin) issues.push({ level: "block", text: `${twin.name} already uses that button here. Pick another, or clear it there first.` });
     if (app.id !== EVERYWHERE_ID) {
       const over = appActions(everywhereApp()).find(a => comboEq(a.button, combo));
-      if (over) issues.push({ level: "note", text: `Overrides Everywhere's “${esc(over.name)}” while ${esc(app.name)} is in front.` });
+      if (over) issues.push({ level: "note", text: `Overrides Everywhere's “${over.name}” while ${app.name} is in front.` });
     }
     // The Power Wheel's shortcuts answer in every app, as Everywhere does (shortcuts.js): the two
     // never share a button, and an app's own action wins over a shortcut while the app is in front.
     const sc = scAllItems().find(x => comboEq(x.button, combo));
     if (sc && app.id === EVERYWHERE_ID)
-      issues.push({ level: "block", text: `The shortcut “${esc(sc.name)}” already uses that button (Settings › Shortcuts). Pick another.` });
+      issues.push({ level: "block", text: `The shortcut “${sc.name}” already uses that button (Settings › Shortcuts). Pick another.` });
     else if (sc)
-      issues.push({ level: "note", text: `Overrides the shortcut “${esc(sc.name)}” while ${esc(app.name)} is in front.` });
+      issues.push({ level: "note", text: `Overrides the shortcut “${sc.name}” while ${app.name} is in front.` });
   }
   return issues;
 }
