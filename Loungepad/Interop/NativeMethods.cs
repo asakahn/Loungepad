@@ -183,6 +183,51 @@ internal static class NativeMethods
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
 
+    // ---- The process tree (see SessionProcesses) ----
+
+    public const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    /// <summary>Every process with its parent's id, in one call and without a handle to any of them.</summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool Process32FirstW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool Process32NextW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+    /// <summary>When a process started, as FILETIME ticks: with the pid, what tells a process from a
+    /// later one that was handed the same id. Needs PROCESS_QUERY_LIMITED_INFORMATION.</summary>
+    [DllImport("kernel32.dll")]
+    public static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_BASIC_INFORMATION
+    {
+        public IntPtr ExitStatus, PebBaseAddress, AffinityMask, BasePriority, UniqueProcessId, InheritedFromUniqueProcessId;
+    }
+
+    /// <summary>Class 0 (ProcessBasicInformation) names one process's parent without a snapshot of
+    /// them all. Needs PROCESS_QUERY_LIMITED_INFORMATION.</summary>
+    [DllImport("ntdll.dll")]
+    public static extern int NtQueryInformationProcess(IntPtr hProcess, int infoClass, out PROCESS_BASIC_INFORMATION info, int size, out int returned);
+
     // ---- Cursor / mouse input ----
 
     [StructLayout(LayoutKind.Sequential)]

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.Text;
 using Loungepad.Interop;
 using Loungepad.Models;
 
@@ -23,15 +22,15 @@ public class GameLaunchService
     public bool GameRunning { get; private set; }
     public string? RunningGameId { get; private set; }
 
-    private string? _runningInstallDir;
+    /// <summary>The running game's processes: its folder's, the one Loungepad started, and what
+    /// those started, with its launcher told apart. Null between sessions.</summary>
+    private volatile SessionProcesses? _session;
     /// <summary>Set when the close came from Loungepad itself (the in-game menu, the game menu, a
     /// swap). Nothing is going to take over from the game then, so nothing is waited for.</summary>
     private volatile bool _closeRequested;
     /// <summary>Cancelled by Abandon: every wait the session makes for a process that has not
     /// appeared ends at once, and the session with it.</summary>
     private volatile CancellationTokenSource? _sessionCts;
-    private readonly Dictionary<uint, bool> _pidCache = new();
-    private readonly object _pidGate = new();
 
     /// <summary>
     /// The session has started but no process of the game has been seen yet: a store client is
@@ -82,12 +81,12 @@ public class GameLaunchService
         // ROM's: the emulator is the process that runs, the one whose window goes on the TV and
         // the one the in-game menu closes. Nothing in a ROM folder is ever a running process.
         var sessionDir = SessionDir(game);
-        _runningInstallDir = sessionDir;
+        var session = new SessionProcesses(sessionDir);
+        _session = session;
         _closeRequested = false;
         var cts = new CancellationTokenSource();
         _sessionCts = cts;
         Starting = true;
-        lock (_pidGate) _pidCache.Clear();
 
         try
         {
@@ -109,9 +108,16 @@ public class GameLaunchService
             // foreground process -- so an emulator whose window opened two seconds after the
             // launcher hid came up behind whatever the launcher had been covering, unfocused.
             // Steam games never showed it: exclusive fullscreen takes the foreground by force.
-            if (tracked is not null) AllowForeground(tracked);
+            if (tracked is not null)
+            {
+                AllowForeground(tracked);
+                session.Seed(tracked);
+            }
             GameStarted?.Invoke(game);
             SessionStarted?.Invoke(game, started);
+
+            // Who has started since, who has gone, and which of them is the launcher.
+            _ = Task.Run(() => FollowAsync(session, monitorCts.Token));
 
             // And, in case the grant was refused or the emulator never asks, the first real window
             // the game opens is brought to the front once.
@@ -126,13 +132,15 @@ public class GameLaunchService
             // process. Two minutes, for a store client that updates the game first; Abandon ends
             // it early when the user gives up on it from the library.
             if (tracked is null && sessionDir is not null)
-                tracked = await WaitForProcessFromDir(sessionDir, TimeSpan.FromSeconds(120), cts.Token);
+                tracked = await WaitForGameProcess(session, TimeSpan.FromSeconds(120), cts.Token);
 
             if (tracked is not null)
             {
                 // Many games chain through their own pre-launcher (e.g. REDprelauncher ->
-                // REDlauncher -> Cyberpunk2077.exe). Keep the session alive as long as ANY
-                // process from the install dir is running, re-attaching to each successor.
+                // REDlauncher -> Cyberpunk2077.exe), and some launchers run the game from another
+                // folder (Prism Launcher -> javaw.exe). Keep the session alive as long as ANY
+                // process of the game is running (SessionProcesses.FindRunning), re-attaching to
+                // each successor.
                 while (tracked is not null)
                 {
                     Log.Info($"Tracking game process {tracked.ProcessName} (pid {tracked.Id}) for {game.Title}");
@@ -144,14 +152,15 @@ public class GameLaunchService
                     var trackedSince = DateTime.UtcNow;
 
                     await tracked.WaitForExitAsync();
-                    if (sessionDir is null) break;
 
                     // Anything of the game's still running right now carries the session on: a
                     // launcher hands over to the game before it exits (REDprelauncher starts
                     // REDlauncher, which starts Cyberpunk2077.exe), so the successor is already
                     // there the moment its parent goes.
-                    tracked = FindProcessFromDir(sessionDir);
+                    tracked = session.FindRunning();
                     if (tracked is not null || _closeRequested) continue;
+                    // With no folder nothing new can join: only a child of a process still running.
+                    if (sessionDir is null) break;
 
                     // Nothing running. This used to wait a flat 15 seconds for a successor after
                     // every exit, which is the pause between a game closing and the launcher
@@ -162,7 +171,7 @@ public class GameLaunchService
                     var grace = DateTime.UtcNow - trackedSince < TimeSpan.FromSeconds(90)
                         ? TimeSpan.FromSeconds(15)
                         : TimeSpan.FromSeconds(1);
-                    tracked = await WaitForProcessFromDir(sessionDir, grace, cts.Token);
+                    tracked = await WaitForGameProcess(session, grace, cts.Token);
                 }
                 Log.Info($"{game.Title} has exited");
             }
@@ -191,8 +200,7 @@ public class GameLaunchService
             // A game killed while frozen leaves handles behind and a Paused that would carry
             // into the next session.
             Resume();
-            _runningInstallDir = null;
-            lock (_pidGate) _pidCache.Clear();
+            _session = null;
 
             if (switchedPrimary) _displays.RestorePrimary();
 
@@ -354,98 +362,85 @@ public class GameLaunchService
         new(@"\x1B\[[0-9;?]*[ -/]*[@-~]", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
-    /// Poll running processes until one's image path is inside the game's install dir. Every
-    /// quarter second rather than every one and a half: this runs while the user is waiting for
-    /// the launcher to come back, and a scan of the process list costs a few milliseconds.
+    /// Poll until something of the game is running. Every quarter second rather than every one
+    /// and a half: this runs while the user is waiting for the launcher to come back, and a
+    /// snapshot of the process list costs a few milliseconds.
     /// </summary>
-    private static async Task<Process?> WaitForProcessFromDir(string installDir, TimeSpan timeout, CancellationToken ct = default)
+    private static async Task<Process?> WaitForGameProcess(SessionProcesses session, TimeSpan timeout, CancellationToken ct = default)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (true)
         {
-            if (FindProcessFromDir(installDir) is { } found) return found;
+            if (session.FindRunning() is { } found) return found;
             if (DateTime.UtcNow >= deadline || ct.IsCancellationRequested) return null;
             try { await Task.Delay(250, ct); }
             catch (OperationCanceledException) { return null; }
         }
     }
 
-    /// <summary>A running process whose image is inside the install dir, right now, or null.</summary>
-    private static Process? FindProcessFromDir(string installDir)
+    /// <summary>
+    /// Keeps the session's picture of the game's processes current. A quarter second while a
+    /// launch chain is busy -- the first half minute, and the half minute after anything joins --
+    /// so a bootstrap that hands over and exits is seen before it goes; once a second after that.
+    /// A refresh is a snapshot of every process, about 5 ms on a PC with 300 of them. The pad
+    /// loop never waits for one: a window that comes to the front is looked up there and then.
+    /// </summary>
+    private static async Task FollowAsync(SessionProcesses session, CancellationToken ct)
     {
-        var prefix = installDir.TrimEnd('\\') + "\\";
-        foreach (var p in Process.GetProcesses())
+        bool reported = false;
+        while (!ct.IsCancellationRequested)
         {
-            try
-            {
-                var path = GetProcessPath(p.Id);
-                if (path is not null && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return p;
-            }
-            catch { /* exited between the listing and the query */ }
-            p.Dispose();
+            try { session.Refresh(); }
+            catch (Exception ex) when (!reported) { reported = true; Log.Info($"Session processes: {ex.Message}"); }
+            catch { /* reported once */ }
+            try { await Task.Delay(session.MsSinceJoin < 30_000 ? 250 : 1000, ct); }
+            catch (TaskCanceledException) { return; }
         }
-        return null;
     }
 
-    private static string? GetProcessPath(int pid)
-    {
-        var h = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-        if (h == IntPtr.Zero) return null;
-        try
-        {
-            var sb = new StringBuilder(1024);
-            uint len = (uint)sb.Capacity;
-            return NativeMethods.QueryFullProcessImageName(h, 0, sb, ref len) ? sb.ToString(0, (int)len) : null;
-        }
-        finally { NativeMethods.CloseHandle(h); }
-    }
+    /// <summary>Is this pid one of the game's processes, its launcher included?</summary>
+    private bool Owns(uint pid) => GameRunning && _session is { } s && s.Contains(pid);
 
     /// <summary>
-    /// True when the foreground window belongs to the running game. Used to gate the gamepad
-    /// mouse: it must keep working when the game is merely running in the background.
+    /// True when the foreground window is the running game itself -- not its launcher. Used to
+    /// gate the joystick mouse: it must keep working when the game is merely running in the
+    /// background, and over a launcher, which is a window to click Play in.
     /// </summary>
     public bool IsGameForeground()
     {
-        if (!GameRunning) return false;
+        if (!GameRunning || _session is not { } session) return false;
         var hwnd = NativeMethods.GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return false;
         NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
-        return PidBelongsToGame(pid);
+        return session.IsGame(pid);
     }
 
-    /// <summary>Does this window belong to the running game? Used by the in-game menu.</summary>
+    /// <summary>Does this window belong to the running game, launcher included? Used by the in-game menu.</summary>
     public bool OwnsWindow(IntPtr hwnd)
     {
-        if (!GameRunning || hwnd == IntPtr.Zero) return false;
+        if (hwnd == IntPtr.Zero) return false;
         NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-        return PidBelongsToGame(pid);
+        return Owns(pid);
     }
 
     /// <summary>
-    /// Every process of the running game right now, for the hardware readings: the launcher, the
-    /// game, anything it spawned in its folder. A scan of the process list, answered through the
-    /// same cache PidBelongsToGame keeps, so a poll every few seconds costs one image-path query
-    /// per NEW process rather than one per process. Empty when nothing is running.
+    /// Every process of the running game right now, for the hardware readings and the pause: the
+    /// launcher, the game, anything they started. Answered from the session's snapshot, so a poll
+    /// every few seconds costs one detail query per NEW process rather than one per process.
+    /// Empty when nothing is running.
     /// </summary>
     public IReadOnlyCollection<int> TrackedPids()
     {
-        if (!GameRunning || _runningInstallDir is null) return Array.Empty<int>();
-        var pids = new List<int>();
-        foreach (var p in Process.GetProcesses())
-        {
-            try { if (PidBelongsToGame((uint)p.Id)) pids.Add(p.Id); }
-            catch { /* exited between the listing and the query */ }
-            finally { p.Dispose(); }
-        }
-        return pids;
+        if (!GameRunning || _session is not { } session) return Array.Empty<int>();
+        return session.LivePids();
     }
 
     /// <summary>
-    /// Ask every process in the running game's install directory to quit. This backs up the
-    /// window-by-window close: a game in exclusive fullscreen (or one whose only window is
-    /// owned by a child process) may not appear in the alt-tab enumeration at all, in which case
-    /// closing "every window the game owns" closes nothing and the menu looks like it did nothing.
-    /// Returns how many processes were asked.
+    /// Ask every process of the running game to quit. This backs up the window-by-window close:
+    /// a game in exclusive fullscreen (or one whose only window is owned by a child process) may
+    /// not appear in the alt-tab enumeration at all, in which case closing "every window the game
+    /// owns" closes nothing and the menu looks like it did nothing. Returns how many processes
+    /// were asked.
     /// </summary>
     public int RequestClose() => RequestClose(out _);
 
@@ -459,16 +454,15 @@ public class GameLaunchService
         // A frozen process never reads the WM_CLOSE it is about to be posted.
         Resume();
         int n = 0, found = 0;
-        foreach (var p in Process.GetProcesses())
+        foreach (var pid in TrackedPids())
         {
             try
             {
-                if (!PidBelongsToGame((uint)p.Id)) continue;
+                using var p = Process.GetProcessById(pid);
                 found++;
                 if (p.CloseMainWindow()) n++;
             }
-            catch { /* protected, or exited between the enumeration and the call */ }
-            finally { p.Dispose(); }
+            catch { /* protected, or exited between the snapshot and the call */ }
         }
         Log.Info($"Close game: asked {n} process(es) to quit");
         foundAny = found > 0;
@@ -566,23 +560,6 @@ public class GameLaunchService
         PausedChanged?.Invoke(false);
     }
 
-    /// <summary>Is this pid one of the game's own processes (launcher, chained exe, game)?</summary>
-    private bool PidBelongsToGame(uint pid)
-    {
-        var dir = _runningInstallDir;
-        if (dir is null || pid == 0) return false;
-        lock (_pidGate)
-        {
-            if (_pidCache.TryGetValue(pid, out var known)) return known;
-            var path = GetProcessPath((int)pid);
-            var prefix = dir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            bool belongs = path is not null
-                && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-            _pidCache[pid] = belongs;
-            return belongs;
-        }
-    }
-
     private static void AllowForeground(Process p)
     {
         try
@@ -611,7 +588,7 @@ public class GameLaunchService
             if (fg != IntPtr.Zero)
             {
                 NativeMethods.GetWindowThreadProcessId(fg, out var fgPid);
-                if (PidBelongsToGame(fgPid)) return;
+                if (Owns(fgPid)) return;
                 // Ours after the first second means an overlay is up. Right at the start it is
                 // only the launcher not having finished hiding yet.
                 if (fgPid == (uint)Environment.ProcessId && DateTime.UtcNow - started > TimeSpan.FromSeconds(1)) return;
@@ -640,7 +617,7 @@ public class GameLaunchService
         {
             if (!NativeMethods.IsWindowVisible(hwnd)) return true;
             NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
-            if (!PidBelongsToGame(pid)) return true;
+            if (!Owns(pid)) return true;
             var ex = (long)NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
             if ((ex & NativeMethods.WS_EX_TOOLWINDOW) != 0) return true;
             if (!NativeMethods.GetWindowRect(hwnd, out var r)) return true;
@@ -681,7 +658,7 @@ public class GameLaunchService
         {
             if (!NativeMethods.IsWindowVisible(hwnd)) return true;
             NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
-            if (!PidBelongsToGame(pid)) return true;
+            if (!Owns(pid)) return true;
 
             var ex = (long)NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
             if ((ex & NativeMethods.WS_EX_TOOLWINDOW) != 0) return true;
