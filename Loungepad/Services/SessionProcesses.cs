@@ -54,8 +54,10 @@ internal sealed class SessionProcesses
         "steam", "steamwebhelper", "steamservice", "steamerrorreporter", "gameoverlayui", "gameoverlayui64",
         "epicgameslauncher", "epicwebhelper", "eosoverlayrenderer-win64-shipping", "eosoverlayrenderer-win32-shipping",
         "galaxyclient", "galaxyclient helper", "gog galaxy notifications renderer",
-        "eadesktop", "eabackgroundservice", "origin", "upc", "uplaywebcore", "battle.net", "riotclientservices",
-        "socialclubhelper", "rockstarservice", "discord",
+        "eadesktop", "eabackgroundservice", "ealauncher", "link2ea", "eaconnect_microsoft", "easteamlauncher", "eaegslauncher",
+        "origin", "upc", "uplaywebcore", "ubisoftconnect", "ubisoftgamelauncher", "ubisoftgamelauncher64", "uplayservice",
+        "ubisoftextension", "upcelevationservice", "battle.net", "riotclientservices",
+        "socialclubhelper", "rockstarservice", "launcherpatcher", "discord",
         "msedge", "msedgewebview2", "chrome", "firefox", "brave", "opera", "vivaldi", "iexplore",
         "explorer", "conhost", "openconsole", "werfault", "werfaultsecure", "openwith",
     };

@@ -26,7 +26,8 @@ public class StoreStatus
 /// </summary>
 public interface IStoreAccount
 {
-    /// <summary>"epic", "gog" or "xbox" -- the key the page uses and the file names on disk.</summary>
+    /// <summary>"epic", "gog", "xbox", "battlenet", "ubisoft" or "ea" -- the key the page uses and
+    /// the file names on disk.</summary>
     string Store { get; }
     string DisplayName { get; }
     StoreStatus Status { get; }

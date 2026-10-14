@@ -61,7 +61,8 @@ const ICONS = {
 
   /* ---- store marks, for the detail page. Each is the silhouette of the real thing reduced to
      this set's stroke weight: Steam's ringed valve, Epic's arched E, GOG's rounded wordmark
-     frame, Xbox's sphere and cross. The store's name is printed beside them either way. ---- */
+     frame, Xbox's sphere and cross, and the three below. The store's name is printed beside
+     them either way. ---- */
   steam: '<circle cx="12" cy="12" r="9"/><circle cx="15.2" cy="8.8" r="2.6"/>'
        + '<circle cx="8.2" cy="15.4" r="2.1"/><path d="M3.3 13.4 6.2 14.6M10.1 14.1l3.1-3"/>',
   epic: '<path d="M5 4.6h14v11.1l-7 3.7-7-3.7z"/><path d="M9.6 8.4h4.8M9.6 12h3.6M9.6 15.4h4.8M9.6 8.4v7"/>',
@@ -69,6 +70,17 @@ const ICONS = {
      + '<text x="12" y="15.5" text-anchor="middle" font-size="7.4" font-weight="700"'
      + ' letter-spacing="0.4" fill="currentColor" stroke="none">GOG</text>',
   xbox: '<circle cx="12" cy="12" r="9"/><path d="M6.6 5.9C9 9 13.5 15.3 16.4 18.8M17.4 5.9C15 9 10.5 15.3 7.6 18.8"/>',
+  /* Battle.net's crossed orbits, Ubisoft's swirl, EA's letters in their ring, and Rockstar's R with
+     its star on a rounded tile. */
+  rockstar: '<rect x="3" y="3" width="18" height="18" rx="4.4"/>'
+          + '<text x="10.4" y="16.6" text-anchor="middle" font-size="10.5" font-weight="800" fill="currentColor" stroke="none">R</text>'
+          + '<path d="M16.6 5.6l.75 1.55 1.7.22-1.24 1.18.31 1.68-1.52-.83-1.52.83.31-1.68-1.24-1.18 1.7-.22z" fill="currentColor" stroke="none"/>',
+  battlenet: '<ellipse cx="12" cy="12" rx="9.6" ry="4.3" transform="rotate(-32 12 12)"/>'
+           + '<ellipse cx="12" cy="12" rx="9.6" ry="4.3" transform="rotate(32 12 12)"/><circle cx="12" cy="12" r="1.6"/>',
+  ubisoft: '<path d="M21 12a9 9 0 1 1-9-9"/><path d="M16.8 12a4.8 4.8 0 1 1-4.8-4.8"/><circle cx="12" cy="12" r="1.4"/>',
+  ea: '<circle cx="12" cy="12" r="9.4"/>'
+    + '<text x="12" y="15.3" text-anchor="middle" font-size="8.6" font-weight="800"'
+    + ' letter-spacing="-0.2" fill="currentColor" stroke="none">EA</text>',
 
   /* ---- overlay-menu actions. Drawn to match the action rather than borrowed from a
      lookalike: an X closes, a moon sleeps, and "switch window" copies the two overlapping

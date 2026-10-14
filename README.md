@@ -38,7 +38,8 @@ https://github.com/user-attachments/assets/0aa19943-f788-4f97-ac93-ffba33159b6f
 
 ## Every game you own, in one library
 
-- **Steam, Epic, GOG, the Xbox app and PC Game Pass**, plus your emulators and ROMs, side by side.
+- **Steam, Epic, GOG, the Xbox app, PC Game Pass, Battle.net, Ubisoft Connect, the EA app and the
+  Rockstar Games Launcher**, plus your emulators and ROMs, side by side.
   Installed games are found on their own, and the games you own but haven't installed can come in
   too, one press from installing.
 - **Art, descriptions, ratings and trailers** are fetched for every game, with no setup.

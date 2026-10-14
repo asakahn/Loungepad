@@ -29,7 +29,8 @@ the TV, the look, your store accounts (for the games you own but have not instal
 emulators and ROMs it found, freeing the Xbox button from Game Bar, Xbox mode and Steam, a PIN so
 the lock screen can be passed with the controller, and starting with Windows. When Playnite or
 Vortex is on the PC, it offers to bring Playnite's library over and to connect Vortex. While you
-answer, it is already scanning Steam, Epic, GOG, the Xbox app and every emulator and ROM folder it
+answer, it is already scanning Steam, Epic, GOG, the Xbox app, Battle.net, Ubisoft Connect, the EA
+app, the Rockstar Games Launcher and every emulator and ROM folder it
 can find, and the left of the screen shows what it has found so far. Every answer is saved as it is
 given, **X** skips the rest, and **Settings → General → First-time setup** runs it again. Settings,
 library and cover art live in `%APPDATA%\Loungepad`; uninstalling is deleting `Loungepad.exe`.
@@ -140,8 +141,9 @@ down; everything else stops being a reason to stand up.
 
 ## Your library, found automatically
 
-Loungepad scans **Steam**, **Epic**, **GOG** and the **Xbox app** from their local install data —
-no accounts, no API keys, nothing phoned anywhere. It picks up real cover art, tracks playtime and
+Loungepad scans **Steam**, **Epic**, **GOG**, the **Xbox app**, **Battle.net**, **Ubisoft Connect**,
+the **EA app** and the **Rockstar Games Launcher** from their local install data — no accounts, no
+API keys, nothing phoned anywhere. It picks up real cover art, tracks playtime and
 sessions locally, and rescans every time it starts, so a game installed yesterday is simply there.
 Anything the scanners drag in that isn't a game (benchmarks, wallpaper tools, redistributables)
 gets hidden with one button.
@@ -165,6 +167,19 @@ Galaxy (or the game's gog.com page when Galaxy is not installed), or the Microso
 Xbox list is your profile's title history, which is what Xbox Live exposes; **Show the PC Game
 Pass catalogue** adds every game included with PC Game Pass, from Microsoft's public catalogue,
 with no sign-in at all.
+
+**Battle.net, Ubisoft Connect and the EA app** sign in the same way, from the same place, and
+their games start through their own apps: Play on a Battle.net game starts the Battle.net app
+first when it is not running and waits for it to sign in. A game you own and do not have opens in
+that store's app ready to install. The Ubisoft list is read from Ubisoft Connect on your PC, so
+sign in to Ubisoft Connect there once as well. Achievements come from Ubisoft Connect (with their
+pictures) and the EA app (names and dates; EA publishes no pictures or rarity). Battle.net has no
+achievements to show: Blizzard keeps no achievement service across its games.
+
+**The Rockstar Games Launcher** has nothing to sign in to here: Rockstar offers other apps no list
+of the games you own and no achievements, so its installed games are the whole of it. They start
+through the launcher, which signs you in. A Rockstar game bought on Steam or Epic stays that
+store's game.
 
 **Trailers.** In the Loungepad theme, rest the highlight on a game for three seconds and its
 trailer plays across the screen, with sound, behind the tiles; open the game's page and the same

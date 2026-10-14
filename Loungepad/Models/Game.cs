@@ -17,8 +17,9 @@ public class Game
 {
     public string Id { get; set; } = "";            // e.g. "steam:1091500", "manual:<guid>"
     public string Title { get; set; } = "";
-    /// <summary>Steam | Epic | GOG | Xbox | Manual, or for a ROM the system's name -- "Super
-    /// Nintendo", "PlayStation" -- which is what the library's platform filter lists it under.</summary>
+    /// <summary>Steam | Epic | GOG | Xbox | Battle.net | Ubisoft | EA | Rockstar | Manual, or for a ROM the
+    /// system's name -- "Super Nintendo", "PlayStation" -- which is what the library's platform
+    /// filter lists it under.</summary>
     public string Platform { get; set; } = "Manual";
     public string? ExePath { get; set; }             // direct executable (GOG / Manual / Epic)
 
@@ -83,6 +84,14 @@ public class Game
     /// <summary>Epic only: the catalogue namespace ("sandbox") the game lives in, from the launcher's
     /// manifest or the library service. Achievements are keyed by it, not by the app name.</summary>
     public string? EpicNamespace { get; set; }
+    /// <summary>Ubisoft only: the "space" Ubisoft's services file the game under, from Ubisoft
+    /// Connect's own configuration cache. Achievements are asked by it; older games have none, and
+    /// none of those has achievements either.</summary>
+    public string? UbisoftSpaceId { get; set; }
+    /// <summary>EA only: the store offer ("Origin.OFR.50.0001234") the account owns the game
+    /// through. The id is the content id the EA app launches by; achievements are asked by the
+    /// offer, which only the account's library knows.</summary>
+    public string? EaOfferId { get; set; }
     /// <summary>Art the game's own store published, used as the last fallback after Steam and the
     /// service: Galaxy's GOG-hosted covers, the Microsoft Store's posters.</summary>
     public string? RemoteCoverUrl { get; set; }

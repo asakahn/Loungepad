@@ -76,18 +76,20 @@ public class StoreLoginWindow : Window
     private readonly string _profileDir;
     private readonly string _startUrl;
     private readonly BrowseOptions? _options;
+    private readonly TimeSpan? _poll;
     private IntPtr _hwnd;
     private bool _probing;
 
     private const int BarHeight = 60;
 
     private StoreLoginWindow(string title, string profileDir, string startUrl, Func<CoreWebView2, Task<bool>> probe, bool visible,
-        BrowseOptions? options)
+        BrowseOptions? options, TimeSpan? poll)
     {
         _profileDir = profileDir;
         _startUrl = startUrl;
         _probe = probe;
         _options = options;
+        _poll = poll;
 
         Title = title;
         Width = 1100;
@@ -170,10 +172,14 @@ public class StoreLoginWindow : Window
     /// </summary>
     /// <param name="browse">Back, Forward, the keyboard and the pad, for a window that is a
     /// browser rather than a sign-in. Null keeps the sign-in shape: one Cancel button.</param>
+    /// <param name="poll">Run the probe on a timer too, for a site that finishes signing in from
+    /// its own script without navigating anywhere (Ubisoft's writes the session into the page's
+    /// storage and stays put).</param>
     public static async Task<bool> RunAsync(Window? owner, string title, string profileDir, string startUrl,
-        Func<CoreWebView2, Task<bool>> probe, bool visible = true, TimeSpan? timeout = null, BrowseOptions? browse = null)
+        Func<CoreWebView2, Task<bool>> probe, bool visible = true, TimeSpan? timeout = null, BrowseOptions? browse = null,
+        TimeSpan? poll = null)
     {
-        var w = new StoreLoginWindow(title, profileDir, startUrl, probe, visible, browse);
+        var w = new StoreLoginWindow(title, profileDir, startUrl, probe, visible, browse, poll);
         if (visible && owner is { IsVisible: true }) w.Owner = owner;
         w.Show();
 
@@ -221,6 +227,13 @@ public class StoreLoginWindow : Window
                 };
             }
             core.Navigate(_startUrl);
+            if (_poll is { } every)
+            {
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = every };
+                timer.Tick += async (_, _) => await ProbeAsync(core);
+                timer.Start();
+                Closed += (_, _) => timer.Stop();
+            }
         }
         catch (Exception ex)
         {
@@ -404,5 +417,49 @@ public class StoreLoginWindow : Window
         if (string.IsNullOrEmpty(json) || json == "null") return "";
         try { return System.Text.Json.JsonSerializer.Deserialize<string>(json) ?? ""; }
         catch { return ""; }
+    }
+
+    /// <summary>
+    /// A GET from inside the page, with its cookies, as the site's own scripts would make it: the
+    /// status and the body, or null when the page could not ask (a network error, a CORS refusal).
+    /// Through the DevTools protocol rather than ExecuteScriptAsync because that does not wait on a
+    /// promise. Only ever used for a URL on the page's own site.
+    /// </summary>
+    public static async Task<(int Status, string Body)?> FetchTextAsync(CoreWebView2 core, string url)
+    {
+        try
+        {
+            var args = JsonSerializer.Serialize(new
+            {
+                expression = "fetch(" + JsonSerializer.Serialize(url) + ", { credentials: 'include', headers: { 'Accept': 'application/json' } })"
+                           + ".then(r => r.text().then(t => JSON.stringify({ s: r.status, b: t }))).catch(() => '')",
+                awaitPromise = true,
+                returnByValue = true,
+            });
+            var raw = await core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", args);
+            using var outer = JsonDocument.Parse(raw);
+            if (!outer.RootElement.TryGetProperty("result", out var result)
+                || !result.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.String) return null;
+            var text = value.GetString();
+            if (string.IsNullOrEmpty(text)) return null;
+            using var doc = JsonDocument.Parse(text);
+            var status = doc.RootElement.TryGetProperty("s", out var s) && s.TryGetInt32(out var n) ? n : 0;
+            var body = doc.RootElement.TryGetProperty("b", out var b) && b.ValueKind == JsonValueKind.String ? b.GetString() ?? "" : "";
+            return (status, body);
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"Sign-in window: fetch of {url} failed ({ex.Message})");
+            return null;
+        }
+    }
+
+    /// <summary>The window is WPF's, so it is made on the UI thread, whichever thread asked: a
+    /// renewal is usually wanted mid-scan, off it.</summary>
+    public static Task<T> OnUiThread<T>(Func<Task<T>> work)
+    {
+        var d = Application.Current?.Dispatcher;
+        if (d is null || d.CheckAccess()) return work();
+        return d.InvokeAsync(work, System.Windows.Threading.DispatcherPriority.Normal).Task.Unwrap();
     }
 }

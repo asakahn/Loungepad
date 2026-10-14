@@ -10,12 +10,13 @@ namespace Loungepad.Services;
 /// <summary>
 /// Somewhere a game's achievements come from. One per store, each asking by the id the store
 /// already gave the library entry -- Steam's app id, Xbox's title id, Epic's namespace, GOG's
-/// product id -- so, like the metadata, nothing here matches on titles. The one exception is
+/// product id, EA's offer, Ubisoft's space -- so, like the metadata, nothing here matches on
+/// titles. Battle.net has none to give: Blizzard keeps no cross-game achievement service. The one exception is
 /// RetroAchievements, which identifies a ROM by its hash and falls back to its title.
 /// </summary>
 public interface IAchievementProvider
 {
-    /// <summary>steam | xbox | epic | gog | retro -- what the page shows as the source.</summary>
+    /// <summary>steam | xbox | epic | gog | ea | ubisoft | retro -- what the page shows as the source.</summary>
     string Source { get; }
     /// <summary>This game is the kind this provider answers for, sign-in or not. What decides
     /// whether the page offers an Achievements button at all.</summary>
@@ -614,6 +615,175 @@ public sealed class GogAchievementProvider : IAchievementProvider
             Log.Info($"GOG achievements for {game.Title} failed: {ex.Message}");
             Unavailable = ex is HttpRequestException or TaskCanceledException;
             return AchievementJson.Failed(game, Source, previous, "Could not reach GOG");
+        }
+    }
+}
+
+// ============================================================================ EA
+
+/// <summary>
+/// EA's GraphQL service, by the offer the account owns the game through and the account's persona,
+/// with the EA sign-in's token -- the query the EA app's own achievements page makes, as Playnite's
+/// achievement plugins send it. EA gives names, descriptions and unlock times; it publishes no
+/// icons and no rarity, so the list draws without either.
+/// </summary>
+public sealed class EaAchievementProvider : IAchievementProvider
+{
+    private readonly EaAccountClient _client;
+    public string Source => "ea";
+    public bool Unavailable { get; private set; }
+
+    public EaAchievementProvider(EaAccountClient client) { _client = client; }
+    public void ResetPass() => Unavailable = false;
+
+    public bool Supports(Game g) => !g.Emulated && g.Platform == EaApp.Platform && g.Id.StartsWith(EaApp.IdPrefix, StringComparison.Ordinal);
+
+    public string? Blocked(Game g)
+    {
+        if (!_client.Status.SignedIn) return "Sign in to EA under Settings → Library to see achievements";
+        if (_client.OfferIdFor(g) is null) return "EA does not list this game on your account";
+        return null;
+    }
+
+    private const string Query = @"query getAchievements($offerId: String!, $playerPsd: String!, $locale: Locale!) {
+  achievements(offerId: $offerId, playerPsd: $playerPsd, showHidden: true, locale: $locale) {
+    id achievements { id name description awardCount date }
+  }
+}";
+
+    public async Task<GameAchievements> FetchAsync(Game game, GameAchievements? previous, CancellationToken ct)
+    {
+        if (Blocked(game) is { } why) return AchievementJson.Failed(game, Source, previous, why);
+        try
+        {
+            var token = await _client.AccessTokenAsync(ct);
+            var persona = _client.PersonaId;
+            if (token is null || persona is null) return AchievementJson.Failed(game, Source, previous, "The EA sign-in has expired. Sign in again under Settings → Library");
+            var offer = _client.OfferIdFor(game)!;
+            using var doc = await EaAccountClient.QueryAsync(token, Query, new { offerId = offer, playerPsd = persona, locale = "US" }, ct);
+            if (doc is null) { Unavailable = true; return AchievementJson.Failed(game, Source, previous, "EA did not answer"); }
+            var items = new List<Achievement>();
+            if (EaAccountClient.Dig(doc.RootElement, "data") is { } data && data.TryGetProperty("achievements", out var sets) && sets.ValueKind == JsonValueKind.Array)
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var set in sets.EnumerateArray())
+                    if (AchievementJson.Arr(set, "achievements") is { } list)
+                        foreach (var a in list.EnumerateArray())
+                        {
+                            var id = AchievementJson.Str(a, "id");
+                            if (string.IsNullOrEmpty(id) || !seen.Add(id)) continue;
+                            var unlocked = (JsonNum.Int(a, "awardCount") ?? 0) > 0;
+                            items.Add(new Achievement
+                            {
+                                Id = id,
+                                Name = (AchievementJson.Str(a, "name") ?? id).Trim(),
+                                Description = AchievementJson.Str(a, "description")?.Trim(),
+                                Unlocked = unlocked,
+                                UnlockedAt = unlocked ? AchievementJson.Iso(AchievementJson.Str(a, "date")) : null,
+                            });
+                        }
+            }
+            else if (EaAccountClient.Errors(doc) is { } err)
+            {
+                Log.Info($"EA achievements for {game.Title}: {err}");
+                return AchievementJson.Failed(game, Source, previous, "EA could not list this game's achievements");
+            }
+            var fresh = AchievementJson.Fresh(game, Source, previous, items);
+            fresh.SourceGameId = offer;
+            return fresh;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return AchievementJson.Failed(game, Source, previous, "EA refused the sign-in. Sign in again under Settings → Library");
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"EA achievements for {game.Title} failed: {ex.Message}");
+            Unavailable = ex is HttpRequestException or TaskCanceledException;
+            return AchievementJson.Failed(game, Source, previous, "Could not reach EA");
+        }
+    }
+}
+
+// ============================================================================ Ubisoft
+
+/// <summary>
+/// Ubisoft Connect's achievements, by the game's "space" (from the client's configuration cache)
+/// through Ubisoft's GraphQL with the Ubisoft sign-in -- the GetAchievements query the Ubisoft
+/// Connect client itself sends. Icons come with the list; rarity does not.
+/// </summary>
+public sealed class UbisoftAchievementProvider : IAchievementProvider
+{
+    private readonly UbisoftAccountClient _client;
+    public string Source => "ubisoft";
+    public bool Unavailable { get; private set; }
+
+    public UbisoftAchievementProvider(UbisoftAccountClient client) { _client = client; }
+    public void ResetPass() => Unavailable = false;
+
+    public bool Supports(Game g) => !g.Emulated && g.Platform == Ubisoft.Platform && Ubisoft.IdOf(g) is not null && Ubisoft.SpaceIdFor(g) is not null;
+
+    public string? Blocked(Game g) =>
+        _client.Status.SignedIn ? null : "Sign in to Ubisoft Connect under Settings → Library to see achievements";
+
+    private const string Query = @"query GetAchievements($spaceId: String!) {
+  game(spaceId: $spaceId) {
+    id
+    viewer { meta { id achievements { totalCount completedCount nodes {
+      id achievementId title description icon
+      viewer { meta { id completionDate isCompleted } }
+    } } } }
+  }
+}";
+
+    public async Task<GameAchievements> FetchAsync(Game game, GameAchievements? previous, CancellationToken ct)
+    {
+        if (Blocked(game) is { } why) return AchievementJson.Failed(game, Source, previous, why);
+        var space = Ubisoft.SpaceIdFor(game)!;
+        try
+        {
+            var answer = await _client.GraphQlAsync("GetAchievements", Query, new { spaceId = space }, ct);
+            if (answer is null) return AchievementJson.Failed(game, Source, previous, "The Ubisoft sign-in has expired. Sign in again under Settings → Library");
+            var (status, body) = answer.Value;
+            if (status is 401 or 403) return AchievementJson.Failed(game, Source, previous, "Ubisoft refused the sign-in. Sign in again under Settings → Library");
+            if (status == 429) { Unavailable = true; return AchievementJson.Failed(game, Source, previous, "Ubisoft is busy; try again in a minute"); }
+            if (status < 200 || status >= 300) return AchievementJson.Failed(game, Source, previous, $"Ubisoft answered {status}");
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0 ? doc.RootElement[0] : doc.RootElement;
+            var items = new List<Achievement>();
+            var list = EaAccountClient.Dig(root, "data", "game", "viewer", "meta", "achievements");
+            if (list is { } l && AchievementJson.Arr(l, "nodes") is { } nodes)
+                foreach (var a in nodes.EnumerateArray())
+                {
+                    var id = AchievementJson.Str(a, "achievementId") ?? (JsonNum.Long(a, "achievementId") is { } n ? n.ToString() : null) ?? AchievementJson.Str(a, "id");
+                    if (string.IsNullOrEmpty(id)) continue;
+                    var meta = EaAccountClient.Dig(a, "viewer", "meta");
+                    var unlocked = meta is { } m && AchievementJson.Bool(m, "isCompleted");
+                    items.Add(new Achievement
+                    {
+                        Id = id,
+                        Name = (AchievementJson.Str(a, "title") ?? id).Trim(),
+                        Description = AchievementJson.Str(a, "description")?.Trim(),
+                        Unlocked = unlocked,
+                        UnlockedAt = unlocked && meta is { } mm ? AchievementJson.Iso(AchievementJson.Str(mm, "completionDate")) : null,
+                        IconUrl = AchievementJson.Str(a, "icon"),
+                    });
+                }
+            else if (root.TryGetProperty("errors", out var errs) && errs.ValueKind == JsonValueKind.Array && errs.GetArrayLength() > 0)
+            {
+                Log.Info($"Ubisoft achievements for {game.Title}: {errs}");
+                return AchievementJson.Failed(game, Source, previous, "Ubisoft could not list this game's achievements");
+            }
+            var fresh = AchievementJson.Fresh(game, Source, previous, items);
+            fresh.SourceGameId = space;
+            return fresh;
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"Ubisoft achievements for {game.Title} failed: {ex.Message}");
+            Unavailable = ex is HttpRequestException or TaskCanceledException;
+            return AchievementJson.Failed(game, Source, previous, "Could not reach Ubisoft");
         }
     }
 }

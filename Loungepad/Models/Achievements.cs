@@ -51,7 +51,7 @@ public class Achievement
 public class GameAchievements
 {
     public string GameId { get; set; } = "";
-    /// <summary>steam | xbox | epic | gog | retro.</summary>
+    /// <summary>steam | xbox | epic | gog | ea | ubisoft | retro.</summary>
     public string Source { get; set; } = "";
     /// <summary>The id the source knows the game by, where it differs from ours: an Xbox title
     /// id, an Epic product id, a RetroAchievements game id. Cached so the next fetch skips the

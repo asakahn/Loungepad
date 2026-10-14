@@ -110,6 +110,9 @@ public class UiBridge
                      new EpicAccountClient(),
                      new GogAccountClient(),
                      new XboxAccountClient(() => _settings.Settings.XboxClientId),
+                     new BattleNetAccountClient(),
+                     new UbisoftAccountClient(),
+                     new EaAccountClient(),
                  })
             _accounts[account.Store] = account;
         _mods = new ModService(() => _settings.Settings.VortexPath);
@@ -144,6 +147,8 @@ public class UiBridge
                 new XboxAchievementProvider((XboxAccountClient)_accounts["xbox"]),
                 new EpicAchievementProvider((EpicAccountClient)_accounts["epic"]),
                 new GogAchievementProvider((GogAccountClient)_accounts["gog"]),
+                new EaAchievementProvider((EaAccountClient)_accounts["ea"]),
+                new UbisoftAchievementProvider((UbisoftAccountClient)_accounts["ubisoft"]),
                 new RetroAchievementProvider(() => _settings.Settings, _achievementStore.Dir),
             }, _launcher);
         _achievements.Fetched += set => _window.Dispatcher.BeginInvoke(() => OnAchievementsFetched(set));
@@ -1941,7 +1946,11 @@ public class UiBridge
         Push(new
         {
             type = "onboarding",
-            launchers = new { steam = launchers.Steam, epic = launchers.Epic, galaxy = launchers.Galaxy, xboxApp = launchers.XboxApp },
+            launchers = new
+            {
+                steam = launchers.Steam, epic = launchers.Epic, galaxy = launchers.Galaxy, xboxApp = launchers.XboxApp,
+                battlenet = launchers.BattleNet, ubisoft = launchers.Ubisoft, eaApp = launchers.EaApp, rockstar = launchers.Rockstar,
+            },
             playnite = new { found = playnite is not null, dir = playnite },
             pin,
             vortex,
@@ -2587,7 +2596,7 @@ public class UiBridge
             _steps.Clear();
             void Add(string id, bool on) => _steps.Add(new ScanStep(id, on ? "pending" : "off", null));
             Add("emulators", s.DetectEmulators);
-            foreach (var id in new[] { "steam", "epic", "gog", "xbox", "roms" }) Add(id, true);
+            foreach (var id in new[] { "steam", "epic", "gog", "xbox", "battlenet", "ubisoft", "ea", "rockstar", "roms" }) Add(id, true);
             Add("steamOwned", s.SteamShowOwned);
             foreach (var account in _accounts.Values) Add(account.Store + "Owned", account.Status.SignedIn);
             Add("gamePass", s.GamePassCatalog);
@@ -2700,6 +2709,9 @@ public class UiBridge
         "steam://install/", "com.epicgames.launcher://apps/", "goggalaxy://openGameView/", "ms-windows-store://pdp/",
         // GOG without Galaxy: the game's own page on gog.com, where the installer is.
         "https://www.gog.com/",
+        // Battle.net's game page, Ubisoft Connect's install, and the EA app's launch link, which
+        // opens a game that is not on disk ready to download.
+        "battlenet://game/", "uplay://install/", "origin2://game/launch?offerIds=",
     };
 
     /// <summary>
@@ -2887,7 +2899,8 @@ public class UiBridge
         if (!ShowDialog(dlg)) return;
 
         game.ExePath = dlg.FileName;
-        if (game.Platform is "Steam" or "Epic") game.PreferDirectLaunch = true;
+        if (game.Platform is "Steam" or "Epic" or BattleNet.Platform or Ubisoft.Platform or EaApp.Platform or Rockstar.Platform)
+            game.PreferDirectLaunch = true;
         _library.Save();
         PushState();
         Push(new { type = "toast", message = $"{game.Title} now launches {Path.GetFileName(dlg.FileName)} directly" });
@@ -3098,6 +3111,9 @@ public class UiBridge
                 epic = _accounts["epic"].Status,
                 gog = _accounts["gog"].Status,
                 xbox = _accounts["xbox"].Status,
+                battlenet = _accounts["battlenet"].Status,
+                ubisoft = _accounts["ubisoft"].Status,
+                ea = _accounts["ea"].Status,
                 gamePass = _gamePass.Status,
             },
             // Whether Vortex is here and where, for the Settings row. The Mods screen itself asks

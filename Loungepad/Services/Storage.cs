@@ -353,6 +353,8 @@ public class LibraryStore
                     // scan lacked is kept from last time, or the achievements would go on every scan.
                     s.XboxTitleId ??= old.XboxTitleId;
                     s.EpicNamespace ??= old.EpicNamespace;
+                    s.UbisoftSpaceId ??= old.UbisoftSpaceId;
+                    s.EaOfferId ??= old.EaOfferId;
                     // Fields a newer build wrote that this one cannot read (see Game.Unknown). A
                     // rescan builds every entry afresh, so without this they would go on the
                     // first scan instead of the first save.

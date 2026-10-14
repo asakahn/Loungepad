@@ -263,6 +263,10 @@ const ONB_PAGES = {
           line("epic", "Epic Games Launcher", L ? L.epic : null, "Epic", "epic"),
           line("gog", "GOG Galaxy", L ? L.galaxy : null, "GOG", "gog"),
           line("xbox", "Xbox app", L ? L.xboxApp : null, "Xbox", "xbox"),
+          line("battlenet", "Battle.net", L ? L.battlenet : null, "Battle.net", "battlenet"),
+          line("ubisoft", "Ubisoft Connect", L ? L.ubisoft : null, "Ubisoft", "ubisoft"),
+          line("ea", "EA app", L ? L.eaApp : null, "EA", "ea"),
+          line("rockstar", "Rockstar Games Launcher", L ? L.rockstar : null, "Rockstar", "rockstar"),
         ] },
         { section: "YOUR ACCOUNTS" },
         ...storeAccountRows(s, onbSet),
@@ -543,6 +547,15 @@ function onbScanLines() {
   const lines = [];
   if (on("emulators")) lines.push({ label: "Emulators", state: by.emulators.state, value: count(by.emulators) !== null ? String(count(by.emulators)) : "" });
   lines.push(store("Steam", "steam", "steamOwned"), store("Epic Games", "epic", "epicOwned"), store("GOG", "gog", "gogOwned"), store("Xbox", "xbox", "xboxOwned"));
+  // The later stores only where their client is installed or they found something: a client
+  // nobody has would be three more lines reading "none installed". The setup's probe names the
+  // clients before the scan reaches them, so a line does not appear halfway down the list.
+  const L = onbInfo().launchers || {};
+  // Rockstar has no account to sign in to, so no owned step: its line is the installed count alone.
+  for (const [label, inst, own, client] of [["Battle.net", "battlenet", "battlenetOwned", "battlenet"],
+                                             ["Ubisoft", "ubisoft", "ubisoftOwned", "ubisoft"], ["EA", "ea", "eaOwned", "eaApp"],
+                                             ["Rockstar", "rockstar", "rockstarOwned", "rockstar"]])
+    if (L[client] || count(by[inst]) || count(by[own])) lines.push(store(label, inst, own));
   if (on("roms")) lines.push({ label: "ROMs", state: by.roms.state, value: count(by.roms) !== null ? String(count(by.roms)) : "" });
   if (on("gamePass")) lines.push({ label: "Game Pass", state: by.gamePass.state, value: count(by.gamePass) !== null ? `${count(by.gamePass)} games` : "" });
   if (on("metadata")) {

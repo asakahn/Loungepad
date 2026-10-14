@@ -11,7 +11,7 @@ namespace Loungepad.Services;
 /// </summary>
 public static class FirstRun
 {
-    public sealed record LauncherSet(bool Steam, bool Epic, bool Galaxy, bool XboxApp);
+    public sealed record LauncherSet(bool Steam, bool Epic, bool Galaxy, bool XboxApp, bool BattleNet, bool Ubisoft, bool EaApp, bool Rockstar);
 
     /// <summary>The store clients on this PC. Not the same question as "are there games": a
     /// launcher can be installed with nothing in it, and GOG games install without Galaxy.</summary>
@@ -22,7 +22,11 @@ public static class FirstRun
         // The Xbox app is a Store package; its per-user data folder exists once it is installed
         // for this account, which is cheaper to ask than the package manager.
         XboxApp: Directory.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Packages", "Microsoft.GamingApp_8wekyb3d8bbwe")));
+            "Packages", "Microsoft.GamingApp_8wekyb3d8bbwe")),
+        BattleNet: Services.BattleNet.ClientInstalled(),
+        Ubisoft: Services.Ubisoft.ClientInstalled(),
+        EaApp: Services.EaApp.ClientInstalled(),
+        Rockstar: Services.Rockstar.ClientInstalled());
 
     private static bool EpicInstalled()
     {

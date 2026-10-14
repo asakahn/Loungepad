@@ -71,6 +71,16 @@ Loungepad/
     LibraryScanner.cs     Steam (ACF/VDF + librarycache art), Epic (.item manifests),
                           GOG (registry), Xbox (MicrosoftGame.config + AppModel repository),
                           ROM folders (one system per folder, see Models/Emulation.cs)
+    BattleNetLibrary.cs   Battle.net: the product table, uninstall entries + product.db, the
+                          client-first launch, and the account sign-in (account.battle.net)
+    UbisoftLibrary.cs     Ubisoft Connect: registry installs, the client's configuration and
+                          ownership caches, the sign-in and its ticket, GraphQL for achievements
+    EaLibrary.cs          EA app: uninstall entries + installerdata.xml, the ea.com sign-in and
+                          token, GraphQL for the owned games and achievements
+    RockstarLibrary.cs    Rockstar Games Launcher: uninstall entries + Rockstar's own keys, launch
+                          through Launcher.exe; installed games only
+    ProtoReader.cs        Just enough protobuf to read product.db and Ubisoft's caches
+    UninstallEntries.cs   The three uninstall keys, read once per call
     RomTitles.cs          A game's title out of a ROM's file name (No-Intro / GoodTools tags)
     EmulatorLaunch.cs     The emulator command line for a ROM: {rom}, {core} and friends
     EmulatorDetection.cs  Finds installed emulators (folders, registry, Start Menu, Steam) and
@@ -96,7 +106,8 @@ Loungepad/
                           from RivaTuner Statistics Server, MSI Afterburner or HWiNFO when running
     AchievementStore.cs   The achievement lists, one JSON per game under achievements\
     AchievementService.cs Fetches lists, refreshes after each session, announces the difference
-    AchievementProviders.cs  Steam, Xbox, Epic, GOG and RetroAchievements, each asked by its own id
+    AchievementProviders.cs  Steam, Xbox, Epic, GOG, EA, Ubisoft and RetroAchievements, each asked
+                          by its own id
     RetroHash.cs          The hash RetroAchievements identifies a ROM by (header rules per system)
     Storage.cs            JSON persistence in %APPDATA%\Loungepad (settings, library, log, covers)
   TrayIcon.cs             The notification-area icon: show or minimize, update, quit
@@ -184,7 +195,8 @@ Loungepad/
 - **Achievements** — each game's list from its own store, asked by the id the library already
   has, never by title: Steam by app id straight from Steam, with the Steam sign-in or your own
   Web API key under Library (never through the metadata service), Xbox by title id, Epic by
-  catalogue namespace and GOG by product id through their sign-ins, and ROMs through
+  catalogue namespace, GOG by product id, EA by offer and Ubisoft by space through their
+  sign-ins (Battle.net has no achievement service to ask), and ROMs through
   RetroAchievements (username and web API key under Settings → Stats), matched by the ROM's
   hash where the system allows it and by title otherwise. Lists are fetched in the background
   after a scan, again a few seconds after a session ends -- the difference is what the unlock
@@ -360,8 +372,8 @@ behaviour and screen structure. Things that could not map 1:1 to local desktop r
    authenticated web APIs), so the Filter overlay offers platform/favorites/installed filters
    and A–Z / Z–A / recency / playtime / size sorts instead.
 6. **Not-installed titles** — the design dims games that are owned but not installed. Steam's
-   library is imported through its Web API, and Epic, GOG and Xbox libraries through a sign-in to
-   each store, when set up (see above). Without them, "not installed" only shows for entries whose
+   library is imported through its Web API, and Epic, GOG, Xbox, Battle.net, Ubisoft Connect and
+   EA libraries through a sign-in to each store, when set up (see above). Without them, "not installed" only shows for entries whose
    files have been removed since scanning.
 7. **Sample imagery** — the design's placeholder photos are replaced by real cover art
    (Steam caches both portrait covers and landscape banners; Xbox supplies square store logos;

@@ -204,6 +204,10 @@ function canHaveAchievements(g) {
   if (g.platform === "Xbox") return !g.id.startsWith("xbox:store:");
   if (g.platform === "Epic") return !!g.epicNamespace;
   if (g.platform === "GOG") return /^gog:\d+$/.test(g.id);
+  if (g.platform === "EA") return g.id.startsWith("ea:");
+  // Ubisoft files achievements under a game's "space"; older games have none, and no achievements.
+  if (g.platform === "Ubisoft") return !!g.ubisoftSpaceId;
+  // Battle.net has no cross-game achievement service to ask.
   return false;
 }
 
@@ -339,7 +343,7 @@ function achScoreLabel(set) {
   return `${fmtInt(set.score)} / ${fmtInt(set.totalScore)} ${unit}`;
 }
 
-const ACH_SOURCE_NAMES = { steam: "Steam", xbox: "Xbox", epic: "Epic Games", gog: "GOG", retro: "RetroAchievements", playnite: "Playnite" };
+const ACH_SOURCE_NAMES = { steam: "Steam", xbox: "Xbox", epic: "Epic Games", gog: "GOG", ea: "EA", ubisoft: "Ubisoft Connect", retro: "RetroAchievements", playnite: "Playnite" };
 
 function renderAchievements() {
   if (!achState) return;
@@ -1868,6 +1872,8 @@ function activitySettingsRows(s, set) {
     rows.push({ name: "Xbox", hint: signedIn("xbox") ? `Signed in as ${st.xbox.user || "Xbox"}. Games the account has played on any device` : "Sign in under Library to fetch Xbox achievements", type: "action", label: "Library", action: toLibrary });
     rows.push({ name: "Epic Games", hint: signedIn("epic") ? `Signed in as ${st.epic.user || "Epic"}` : "Sign in under Library to fetch Epic achievements", type: "action", label: "Library", action: toLibrary });
     rows.push({ name: "GOG", hint: signedIn("gog") ? `Signed in as ${st.gog.user || "GOG"}` : "Sign in under Library to fetch GOG achievements", type: "action", label: "Library", action: toLibrary });
+    rows.push({ name: "EA", hint: signedIn("ea") ? `Signed in as ${st.ea.user || "EA"}. EA lists names and unlock dates, without pictures or rarity` : "Sign in under Library to fetch EA achievements", type: "action", label: "Library", action: toLibrary });
+    rows.push({ name: "Ubisoft Connect", hint: signedIn("ubisoft") ? `Signed in as ${st.ubisoft.user || "Ubisoft"}` : "Sign in under Library to fetch Ubisoft Connect achievements", type: "action", label: "Library", action: toLibrary });
     rows.push({
       name: "RetroAchievements username", hint: "For emulated games: a ROM is matched by its hash to the site's game, or by title on systems that cannot be hashed. Free at retroachievements.org",
       type: "action", label: s.retroAchievementsUser ? s.retroAchievementsUser : "Not set",

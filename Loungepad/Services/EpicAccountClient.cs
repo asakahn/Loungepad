@@ -336,6 +336,7 @@ public class EpicAccountClient : IStoreAccount
         LaunchUri = g.LaunchUri, InstallUri = g.InstallUri, PackageFamilyName = g.PackageFamilyName,
         RemoteCoverUrl = g.RemoteCoverUrl, RemoteBackdropUrl = g.RemoteBackdropUrl, LastPlayed = g.LastPlayed,
         XboxTitleId = g.XboxTitleId, EpicNamespace = g.EpicNamespace,
+        UbisoftSpaceId = g.UbisoftSpaceId, EaOfferId = g.EaOfferId,
     };
 
     private static string? Str(JsonElement e, string key) =>

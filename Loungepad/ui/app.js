@@ -25,7 +25,7 @@ let S = {
   scanProgress: [],                      // [{ id, state: pending|running|done|failed|off, count }] -- the last scan, source by source (BeginSteps on the host)
   padName: null,                         // the pad in hand as Windows names it, for the first-run setup's welcome
   steamAccount: null,                    // { steamId, personaName, ownedCount, fetchedAt, error }
-  stores: null,                          // { epic|gog|xbox: { signedIn, user, count, fetchedAt, error }, gamePass: { count, fetchedAt, error } }
+  stores: null,                          // { epic|gog|xbox|battlenet|ubisoft|ea: { signedIn, user, count, fetchedAt, error }, gamePass: { count, fetchedAt, error } }
   emulation: null,                       // { emulators: [...], romFolders: [...], platforms: [{ id, name, shortName, extensions, hasCores }] }
   update: null,                          // { state, current, latest, progress, message, checkedAt, userAsked } -- see UpdateService
   actions: null,                         // { apps: [{ id, name, exes, icon, installed, custom, pinned, modified, actions: [...] }] } -- see actions.js
@@ -54,7 +54,13 @@ const F = { platforms: new Set(), status: new Set(), collections: new Set(), fav
 /* The stores. An emulated game's platform is its SYSTEM -- "Super Nintendo", "PlayStation" -- so
    the filter lists those too, but only the ones the library actually has (see emulatedPlatforms):
    forty consoles with nothing under them would bury the five rows anyone uses. */
-const PLATFORMS = ["Steam", "Epic", "GOG", "Xbox", "Manual"];
+const PLATFORMS = ["Steam", "Epic", "GOG", "Xbox", "Battle.net", "Ubisoft", "EA", "Rockstar", "Manual"];
+/* Listed only once the library has a game from them: most people have one or two of these, and
+   four rows that always say 0 would push the rows anyone uses down the menu. */
+const LATER_STORES = new Set(["Battle.net", "Ubisoft", "EA", "Rockstar"]);
+function platformsInUse() {
+  return PLATFORMS.filter(p => !LATER_STORES.has(p) || F.platforms.has(p) || S.games.some(g => g.platform === p));
+}
 
 /** The systems the library holds ROMs for, in the catalogue's order, each with its count. */
 function emulatedPlatforms() {
@@ -2621,7 +2627,7 @@ function visibleGames() { return S.games.filter(g => !g.hidden); }
  * Two entries from the SAME store never group, even with identical titles: Steam sells two games
  * called exactly "DOOM", and merging them would hide one the account paid for.
  */
-const EDITION_ORDER = ["Steam", "Epic", "GOG", "Xbox", "Manual"];
+const EDITION_ORDER = ["Steam", "Epic", "GOG", "Xbox", "Battle.net", "Ubisoft", "EA", "Rockstar", "Manual"];
 const EDITION_SUFFIXES = [
   "game of the year edition", "anniversary edition", "definitive edition", "enhanced edition",
   "complete edition", "ultimate edition", "standard edition", "special edition", "deluxe edition",
@@ -3177,7 +3183,10 @@ function launchGame(g) {
    ask whether there is one. An installed game never carries it. */
 function canInstall(g) { return !!g.installUri; }
 
-const STORE_NAMES = { Steam: "Steam", Epic: "the Epic Games Launcher", GOG: "GOG Galaxy", Xbox: "the Microsoft Store" };
+const STORE_NAMES = {
+  Steam: "Steam", Epic: "the Epic Games Launcher", GOG: "GOG Galaxy", Xbox: "the Microsoft Store",
+  "Battle.net": "the Battle.net app", Ubisoft: "Ubisoft Connect", EA: "the EA app", Rockstar: "the Rockstar Games Launcher",
+};
 function storeName(g) {
   // A GOG game on a PC without Galaxy opens its own page on gog.com, where the installer is.
   if (g.platform === "GOG" && /^https:\/\/www\.gog\.com/.test(g.installUri || "")) return "gog.com";
@@ -3377,7 +3386,8 @@ function renderDetailDescriptors(g) {
  * guessing game for anyone who does not already know the mark.
  */
 const PLATFORM_ICONS = {
-  Steam: "steam", Epic: "epic", GOG: "gog", Xbox: "xbox", Manual: "file",
+  Steam: "steam", Epic: "epic", GOG: "gog", Xbox: "xbox", "Battle.net": "battlenet", Ubisoft: "ubisoft", EA: "ea",
+  Rockstar: "rockstar", Manual: "file",
 };
 
 /** The mark for where a game came from: its store's, or the cartridge for anything emulated. */
@@ -3992,11 +4002,11 @@ function allSettingsRows() {
 
   rows.push({ section: "LIBRARY", cat: "library" });
   const romCount = S.games.filter(g => g.emulated).length;
-  const counts = PLATFORMS.map(p => `${p} ${S.games.filter(g => g.platform === p).length}`)
+  const counts = platformsInUse().map(p => `${p} ${S.games.filter(g => g.platform === p).length}`)
     .concat(romCount ? [`Emulated ${romCount}`] : []).join(" · ");
   rows.push({
     name: "Rescan platforms",
-    hint: (counts ? counts + " · " : "") + "Steam, Epic, GOG and the Xbox app from their install data, plus every ROM folder and playlist",
+    hint: (counts ? counts + " · " : "") + "Steam, Epic, GOG, the Xbox app, Battle.net, Ubisoft Connect, the EA app and the Rockstar Games Launcher from their install data, plus every ROM folder and playlist",
     type: "action", label: S.scanning ? "Scanning…" : "Rescan",
     action: () => { if (!S.scanning) send({ cmd: "rescan" }); },
   });
@@ -4258,6 +4268,12 @@ function storeAccountRows(s, set) {
       "Sign in to list every game you own on GOG. Installs go through GOG Galaxy when it is here, and through gog.com when it is not"),
     storeRow("xbox", "Xbox account",
       "Sign in with your Microsoft account to list the PC games on your Xbox profile — the ones it has seen you play"),
+    storeRow("battlenet", "Battle.net account",
+      "Sign in to list every Blizzard game on your account, and the others Battle.net sells. Anything not installed opens in the Battle.net app ready to install"),
+    storeRow("ubisoft", "Ubisoft Connect account",
+      "Sign in to list every game you own on Ubisoft Connect and to see their achievements. The list is read from Ubisoft Connect on this PC, so sign in to it here once too"),
+    storeRow("ea", "EA account",
+      "Sign in to list every game you own on the EA app and to see their achievements. Anything not installed opens in the EA app ready to download"),
     toggleRow("Show the PC Game Pass catalogue", gamePassHint(),
       () => !!s.gamePassCatalog, v => set(() => s.gamePassCatalog = v)),
   ];
@@ -5269,7 +5285,7 @@ function filterDropdownRows() {
     label: p, icon, sub, checked: F.platforms.has(p),
     toggle: () => { F.platforms.has(p) ? F.platforms.delete(p) : F.platforms.add(p); },
   });
-  PLATFORMS.forEach(p => rows.push(platformRow(p, "gamepad")));
+  platformsInUse().forEach(p => rows.push(platformRow(p, "gamepad")));
   // One row per system there are ROMs for, under their own heading. Same set as the stores --
   // ticking SNES and Steam shows both -- so a system is a platform in every sense the filter has.
   const systems = emulatedPlatforms();
@@ -5541,6 +5557,11 @@ function launchRoute(g) {
   if (g.platform === "Steam") return "Through the Steam client";
   if (g.platform === "Epic") return "Through the Epic Games launcher";
   if (g.platform === "Xbox") return "Through the Xbox app";
+  // A classic Battle.net game (Diablo II, Warcraft III) has no client to go through.
+  if (g.platform === "Battle.net" && !/^battlenet:(D2X?|W3CX?)$/i.test(g.id)) return "Through the Battle.net app";
+  if (g.platform === "Ubisoft") return "Through Ubisoft Connect";
+  if (g.platform === "EA") return "Through the EA app";
+  if (g.platform === "Rockstar") return "Through the Rockstar Games Launcher";
   return g.exePath || "Directly from its executable";
 }
 
@@ -5633,7 +5654,7 @@ function manageItems() {
       sub: launchRoute(g),
       action: () => { send({ cmd: "pickExe", id: g.id }); closeManage(); },
     });
-    if (g.preferDirectLaunch && (g.platform === "Steam" || g.platform === "Epic"))
+    if (g.preferDirectLaunch && ["Steam", "Epic", "Battle.net", "Ubisoft", "EA", "Rockstar"].includes(g.platform))
       items.push({ label: `Launch through ${g.platform} again`, icon: "store", action: () => { send({ cmd: "launchViaStore", id: g.id }); closeManage(); } });
     if (canHaveMods(g)) items.push({
       label: "Mods", icon: "chip", sub: "Switch mods on and off, remove them, find more — through Vortex",
@@ -8228,6 +8249,7 @@ const mockAct = (() => {
   makeSet("Ridgeline 84", "epic", 25, 3, { names });
   makeSet("Forza Horizon 5", "xbox", 50, 20, { names, platform: "Xbox" });
   makeSet("Super Mario World", "retro", 30, 8, { names, platform: "Super Nintendo", sourceName: "Super Mario World" });
+  makeSet("Emberline Saga", "ubisoft", 40, 12, { names, platform: "Ubisoft" });
   return { sessions, sets, ids };
 })();
 function mockAchSummaries() {
@@ -8403,6 +8425,16 @@ function mockHandle(msg) {
       g("Forza Horizon 5", "Steam", { installed: false, installUri: "steam://install/1551360" }),
       g("Hollow Reef", "Xbox", { installed: false, installUri: "ms-windows-store://pdp/?productid=9XXXXXXXXXXX" }),
       g("Starfield", "Xbox", { installed: false, installUri: "ms-windows-store://pdp/?productid=9NCJSXWZRJPS" }),
+      // The later stores: a game of each on disk, one of each owned and not, and one copy in two
+      // stores so the grouping shows "also on EA".
+      g("Emberline Saga", "Ubisoft", { ubisoftSpaceId: "mock-space", playtimeMinutes: 320, sessions: 6, lastPlayed: new Date(now - 13 * 86400000).toISOString(), sizeBytes: 48 * 1024 ** 3 }),
+      g("Gridiron Pulse", "EA", { playtimeMinutes: 45, sessions: 1, sizeBytes: 52 * 1024 ** 3 }),
+      g("Frostgate", "Battle.net", { sizeBytes: 90 * 1024 ** 3 }),
+      g("Starfall Tactics", "Battle.net", { installed: false, installUri: "battlenet://game/Pro" }),
+      g("Cobalt Run", "Ubisoft", { installed: false, installUri: "uplay://install/1", ubisoftSpaceId: "mock-space-2" }),
+      g("Harbor Kings", "EA", { installed: false, installUri: "origin2://game/launch?offerIds=1&autoDownload=1" }),
+      g("Salt & Tide", "EA", { installed: false, installUri: "origin2://game/launch?offerIds=2&autoDownload=1" }),
+      g("Dust County", "Rockstar", { playtimeMinutes: 900, sessions: 11, lastPlayed: new Date(now - 14 * 86400000).toISOString(), sizeBytes: 120 * 1024 ** 3 }),
       g("Wallpaper Engine", "Steam", { hidden: true, sizeBytes: 2 * 1024 ** 3 }),
       // ROMs: the platform is the system, and they group with nothing.
       g("Super Mario World", "Super Nintendo", { emulated: true, platformId: "snes", romFolderId: "f1", romPath: "D:\\ROMs\\SNES\\Super Mario World (USA).sfc", playtimeMinutes: 420, sessions: 6, lastPlayed: new Date(now - 86400000 * 1.5).toISOString(), sizeBytes: 512 * 1024, releaseDate: "Nov 21, 1990", developer: "Nintendo EAD", publisher: "Nintendo", genres: ["Platform"], criticScore: null, criticSource: null }),
@@ -8432,6 +8464,9 @@ function mockHandle(msg) {
         epic: { signedIn: true, user: "couchplayer", count: 35, fetchedAt: new Date().toISOString(), error: null },
         gog: { signedIn: false, user: null, count: 0, fetchedAt: null, error: null },
         xbox: { signedIn: true, user: "CouchGamer", count: 12, fetchedAt: null, error: "The sign-in has expired. Sign in again" },
+        battlenet: { signedIn: true, user: null, count: 4, fetchedAt: new Date().toISOString(), error: null },
+        ubisoft: { signedIn: true, user: "couchplayer", count: 13, fetchedAt: new Date().toISOString(), error: null },
+        ea: { signedIn: false, user: null, count: 0, fetchedAt: null, error: null },
         gamePass: { count: 0, fetchedAt: null, error: null },
       },
       emulation: mockEmulation,
@@ -8493,7 +8528,7 @@ function mockHandle(msg) {
     mockScanProgress();
   } else if (msg.cmd === "onboardingProbe") {
     setTimeout(() => {
-      handleHostMessage({ type: "onboarding", launchers: { steam: true, epic: true, galaxy: false, xboxApp: true },
+      handleHostMessage({ type: "onboarding", launchers: { steam: true, epic: true, galaxy: false, xboxApp: true, battlenet: true, ubisoft: true, eaApp: false, rockstar: true },
         playnite: { found: true, dir: mockPlaynite.dir }, pin: !!mockHandle._pin, vortex: mockVortex().vortex });
       handleHostMessage({ type: "onboardingVortex", busy: false, mode: "peek", ...mockVortex() });
     }, 300);
@@ -8875,9 +8910,10 @@ function mockHandle(msg) {
    setup's rail can be watched filling in. GOG is not signed in and Game Pass is off, as in the
    mock's stores, so both are "off". */
 function mockScanProgress() {
-  const plan = [["emulators", 2], ["steam", 9], ["epic", 5], ["gog", 4], ["xbox", 2], ["roms", 8],
-    ["steamOwned", 3], ["epicOwned", 1], ["gogOwned", null], ["xboxOwned", 2], ["gamePass", null], ["metadata", null], ["achievements", null]];
-  const off = new Set(["gogOwned", "gamePass"]);
+  const plan = [["emulators", 2], ["steam", 9], ["epic", 5], ["gog", 4], ["xbox", 2], ["battlenet", 1], ["ubisoft", 1], ["ea", 1], ["rockstar", 1], ["roms", 8],
+    ["steamOwned", 3], ["epicOwned", 1], ["gogOwned", null], ["xboxOwned", 2], ["battlenetOwned", 1], ["ubisoftOwned", 1], ["eaOwned", null],
+    ["gamePass", null], ["metadata", null], ["achievements", null]];
+  const off = new Set(["gogOwned", "eaOwned", "gamePass"]);
   const steps = plan.map(([id]) => ({ id, state: off.has(id) ? "off" : "pending", count: null }));
   const push = () => handleHostMessage({ type: "scanProgress", steps: steps.map(s => ({ ...s })) });
   clearTimeout(mockScanProgress._t);

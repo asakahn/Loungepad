@@ -43,6 +43,11 @@ public static class PlayniteImport
     private static readonly Guid GogPlugin = Guid.Parse("aebe8b7c-6dc3-4a66-af31-e7375c6b5e9e");
     private static readonly Guid EpicPlugin = Guid.Parse("00000002-dbd1-46c6-b5d0-b1ba559d10e4");
     private static readonly Guid XboxPlugin = Guid.Parse("7e4fbb5e-2ae3-48d4-8ba0-6b30e7a4e287");
+    private static readonly Guid BattleNetPlugin = Guid.Parse("e3c26a3d-d695-4cb7-a769-5ff7612c7edd");
+    private static readonly Guid UbisoftPlugin = Guid.Parse("c2f038e5-8b92-4877-91f1-da9094155fc5");
+    /// <summary>Origin's, kept by the community EA app library: its game ids are store offers.</summary>
+    private static readonly Guid EaPlugin = Guid.Parse("85dd7072-2f20-4e76-a007-41035e390724");
+    private static readonly Guid RockstarPlugin = Guid.Parse("88409022-088a-4de8-805a-fdbac291f00a");
 
     /// <summary>The Source of a list brought in from SuccessStory, and the Origin of a session
     /// brought in from GameActivity.</summary>
@@ -407,6 +412,12 @@ public static class PlayniteImport
                 if (p.PluginId == SteamPlugin) id = Have($"steam:{gid}");
                 else if (p.PluginId == GogPlugin) id = Have($"gog:{gid}");
                 else if (p.PluginId == EpicPlugin) id = Have($"epic:{gid}");
+                else if (p.PluginId == BattleNetPlugin) id = Have(BattleNet.IdPrefix + gid);
+                else if (p.PluginId == UbisoftPlugin) id = Have(Ubisoft.IdPrefix + gid);
+                else if (p.PluginId == RockstarPlugin) id = Have(Rockstar.IdPrefix + gid);
+                else if (p.PluginId == EaPlugin)
+                    id = library.FirstOrDefault(g => g.EaOfferId is { } offer && offer.Equals(gid, StringComparison.OrdinalIgnoreCase))?.Id
+                         ?? Have(EaApp.IdPrefix + gid);
                 else if (p.PluginId == XboxPlugin)
                     id = library.FirstOrDefault(g => g.PackageFamilyName is { } pfn && pfn.Equals(gid, StringComparison.OrdinalIgnoreCase))?.Id
                          ?? Have($"xbox:pfn:{gid}");

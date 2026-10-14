@@ -178,7 +178,9 @@ public sealed class ModService
     /// <summary>Vortex's name for the store a game came from, for the record it keeps of where it found it.</summary>
     private static string? StoreOf(string platform) => platform switch
     {
-        "Steam" => "steam", "GOG" => "gog", "Epic" => "epic", "Xbox" => "xbox", _ => null,
+        "Steam" => "steam", "GOG" => "gog", "Epic" => "epic", "Xbox" => "xbox",
+        // Vortex still files the EA app under its old name.
+        EaApp.Platform => "origin", Ubisoft.Platform => "uplay", _ => null,
     };
 
     /// <summary>Run one change through the bridge and hand back the screen afterwards. A bridge

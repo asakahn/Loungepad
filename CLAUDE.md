@@ -1255,6 +1255,106 @@ Stop the scrolled grid from clipping through the All games header
   `000000004C12AE6F` with `t=`, which @xboxreplay/xboxlive-auth reports working and which can go
   the same way. The ticket loop tries every prefix on 400/401/403 and logs each answer.
 
+## Battle.net, Ubisoft Connect, the EA app and Rockstar (1.11.0)
+
+- **Built on the branch `more-launchers`** (Oct 13-14 2026, off v1.10.0 at 52094f7; the user's ask:
+  "similar to how Playnite handles these"). One file per store, local scan and account together:
+  `BattleNetLibrary.cs`, `UbisoftLibrary.cs`, `EaLibrary.cs`; `ProtoReader` reads the protobuf
+  caches and `UninstallEntries` the three uninstall keys. Platforms are "Battle.net", "Ubisoft",
+  "EA"; ids `battlenet:<product code>`, `ubisoft:<product id>`, `ea:<first content id>`; account
+  keys `battlenet`, `ubisoft`, `ea`. Being signed in is the opt-in, as for Epic/GOG/Xbox.
+- **Battle.net names games only by codes**, so `BattleNet.Products` (Playnite's BattleNetGames.cs,
+  Jan 2026) maps the uninstaller's `--uid=` (prefix match, LONGEST first: `w1r` must not find
+  `w1`), product.db's uid and product code, and account.battle.net's title id to a name. Installed:
+  uninstall entries, then `ProgramData\Battle.net\Agent\product.db` ({1: uid, 2: code, 3: {1: path},
+  4: {1: {1: installed}}}, verified on this PC's Overwatch install), then `aggregate.json` -- the
+  file the client writes for the Xbox app, with each installed game's code, name, box art and its
+  link `battlenet://game/pro`. A code the table does not know is registered from aggregate.json
+  (`Found`) and launched by that link; table games launch with Playnite's `Battle.net.exe
+  --exec="launch Pro"`, after starting the client when it is not running and waiting for it (45 s
+  for a window or five processes, then 5 s; a cold `--exec` is dropped). That wait runs beside
+  the session, so the launcher parks at once. Install is the lower-case `battlenet://game/<code>`.
+  Owned games: account.battle.net's `/api/games-and-subs` and `/api/classic-games`, fetched from
+  inside the page (`StoreLoginWindow.FetchTextAsync`); renewed by a hidden window on Playnite's
+  `/oauth2/authorization/account-settings`. No token is stored, only the fact of the sign-in.
+  **Battle.net has no achievements**: Blizzard keeps no cross-game service.
+- **Ubisoft's owned list is the client's ownership cache, not its configuration cache.**
+  `cache\configuration\configurations` is protobuf {1: id, 2: install id, 3: YAML} for every
+  product the client has a configuration for -- 988 on this PC against 13 owned games, which is
+  why Playnite's "every configuration with a start_game" is not used. `cache\ownership\<user id>` is
+  a 0x108-byte signed header, then protobuf {1: id, 2: id, ...} per owned product (the GOG Galaxy
+  integration's reading). Games are owned ∩ start_game, not `is_ulc`, not anyone's add-on, and not
+  `third_party_platform` (a Steam-linked copy: Rainbow Six Siege, Watch Dogs 2 here). The YAML is
+  read by `MiniYaml` (dotted paths, list items flattened, block scalars skipped); names and art go
+  through `localizations.default`. Installed: `Ubisoft\Launcher\Installs\<id>` (Registry32 first).
+  Launch `uplay://launch/<id>/0`, install `uplay://install/<id>`.
+- **The Ubisoft sign-in reads the page's own storage** (`PRODloginData`, `PRODrememberMe` on
+  connect.ubisoft.com, with a 1 s polling probe since the page does not navigate when it is done):
+  ticket, session id, user id, name, remember-me ticket. The ticket is renewed with `PUT
+  /v3/profiles/sessions` (`Ubi_v1 t=`), else `POST` with `rm_v1 t=<remember-me>`, `Ubi-AppId`
+  f68a4bb5-… (the client's id, as GOG Galaxy's integration uses). The ownership file is picked by
+  the signed-in user id, else the newest. Achievements: GraphQL `GetAchievements(spaceId)` on
+  `/v1/profiles/me/uplay/graphql`; the space id is the configuration's `root.space_id`, kept on the
+  game as `UbisoftSpaceId` (carried by MergeScanned). The query's `productId` is NOT the uplay id
+  (AC4 is 273 to the client and 437 there), so it is left out.
+- **EA installs are uninstall entries whose folder has `__Installer\installerdata.xml`** (old
+  `<game>` manifests and newer `<DiPManifest>`; Peggle on this PC is the old kind, its exe from the
+  entry's DisplayIcon). The EA app's own record (`ProgramData\EA Desktop\…\IS`) is encrypted to the
+  machine and not read. Launch and install are both `origin2://game/launch?offerIds=<content id>&
+  autoDownload=1`, Lutris's link. The account's copy of an installed game takes the installed id by
+  ANY content id the manifest lists, or the two would be two tiles.
+- **The EA sign-in is a web session, not the EA app's login**: the user signs in on www.ea.com, and
+  once EA hands the window back to www.ea.com it opens
+  `accounts.ea.com/connect/auth?client_id=ORIGIN_JS_SDK&response_type=token&redirect_uri=nucleus:rest&prompt=none`
+  ITSELF and reads the JSON off the page (`TokenFromBrowserAsync`); renewals run the same window
+  hidden, straight to that address. **Copying the cookies out into HttpClient does not work**: the
+  first cut did (as Lutris does) and EA answered `login_required` to every one (the user's report,
+  Oct 14 2026) -- the remember-me cookie `remid` is scoped to path `/connect`, so
+  `GetCookiesAsync("https://accounts.ea.com")` never returned it, and the session cookie is
+  memory-only. The browser sends its own; PlayniteAchievements reads it the same way. The token
+  lasts four hours (`expires_in` 14400) and `service-aggregation-layer.juno.ea.com/graphql` takes it
+  as a bearer. The EA app's own login (JUNO_PC_CLIENT)
+  needs a `pc_sign`: an HMAC over the PC's BIOS, board and disk serials with keys taken out of the
+  app. Not used. Owned: `ownedGameProducts` (EA storefront, base games, PC; subscription-only
+  ownership -- EA Play, Game Pass -- left out), retried without `gameProductUser` if the service
+  stops knowing it; `legacyOffers` (anonymous) gives each offer's content id, `gameProducts` the art.
+  Achievements: `achievements(offerId, playerPsd, showHidden, locale: "US")` -- names, descriptions,
+  dates; EA publishes no icons or rarity, so they draw the trophy. The offer is `EaOfferId` on the
+  owned entry or looked up in the account's cache for an installed one (`OfferIdFor`).
+- **Rockstar is installed games only, as in Playnite** (the user's follow-up ask, Oct 14 2026;
+  `RockstarLibrary.cs`). Uninstall entries carrying `-uninstall=<title id>`, then Rockstar's own
+  `HKLM\SOFTWARE\Rockstar Games\<game>` InstallFolder (the keys in the launcher's public
+  `gamedownloads-rockstargames-com.akamaized.net/public/title_metadata.json`), only with the game's
+  exe there. Launch is Playnite's `Launcher.exe -launchTitleInFolder "<folder>"`, never seeded as the
+  session's process (it stays in the tray). The scan runs LAST and drops any folder another store
+  found or one under `\steamapps\`: a Steam or Epic copy runs through the Rockstar launcher too, and
+  launching it as Rockstar's fails. GTA V is "Grand Theft Auto V Legacy", the launcher's and Steam's
+  name since Enhanced. No owned list and no achievements: Rockstar has no API for the first, and
+  Social Club's `awardedAchievements` needs a sign-in with rotating refresh cookies and a device
+  fingerprint and returns achievement numbers without names. GOG Galaxy's Rockstar plugin finds
+  owned games in `Documents\Rockstar Games\Launcher\launcher.log` by fixed column offsets; that log
+  also holds access tokens, and on this PC (an account owning nothing there) it has none of the
+  lines the plugin reads. Not used.
+- `NeverAdopted` gained the clients' helpers (EALauncher, Link2EA, UbisoftConnect, upc,
+  UplayService, LauncherPatcher…); Vortex files EA as "origin" and Ubisoft as "uplay" (`ModService.StoreOf`); the
+  Playnite import maps Battle.net's and Ubisoft's plugin ids directly and EA's by offer id.
+- The page lists the four in the platform filter and the Rescan hint only once the library has a
+  game from them (`platformsInUse`), and the setup's rail only where the client is installed or
+  found something. Marks in glyphs.js: `battlenet` (crossed orbits), `ubisoft` (swirl), `ea`,
+  `rockstar` (R and star on a tile).
+- **Verified** (Oct 14 2026): a scratch harness over Loungepad.dll (76 checks, real log held shut;
+  Rockstar's over synthetic uninstall entries, since no launcher game is installed here)
+  against this PC -- Overwatch 2 (installed while this was built) once with aggregate.json's box art, Prince of
+  Persia from the registry, 13 owned Ubisoft games and no add-ons, Peggle as `ea:1007718` -- plus
+  synthetic product.db, aggregate.json, YAML and manifests; the windowed Debug build read over CDP
+  showed all three in the library with their links. EA end to end on the user's account (Oct 14
+  2026, a scratch WPF app running the hidden renewal on the real profile, printing counts only): a
+  token, accepted by GraphQL; 3 owned games, each with a content id and art; the installed Peggle
+  matched by content id to its owned entry; achievements 16/50 on one; the library query with
+  `gameProductUser` needed no fallback. **Not verified**: the Battle.net and Ubisoft sign-ins and
+  their APIs live, an actual launch or install through any of the four
+  clients, and `battlenet://game/<code>` opening the game's page rather than starting it.
+
 ## Editions, the confirm dialog and search
 
 - **One game in several stores is one tile.** Library entries stay separate on the host (install

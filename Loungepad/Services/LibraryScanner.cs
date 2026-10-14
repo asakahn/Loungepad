@@ -7,8 +7,9 @@ using Microsoft.Win32;
 namespace Loungepad.Services;
 
 /// <summary>
-/// Scans Steam (appmanifest ACF files), Epic (launcher .item manifests) and GOG (registry)
-/// for installed games. Manual entries are managed separately by LibraryStore, and the games a
+/// Scans Steam (appmanifest ACF files), Epic (launcher .item manifests), GOG (registry) and the
+/// Xbox app for installed games, and asks BattleNet, Ubisoft, EaApp and Rockstar for theirs (each in
+/// its own file, with its account where there is one). Manual entries are managed separately by LibraryStore, and the games a
 /// Steam account owns without having installed come from SteamAccountService and are turned into
 /// entries by <see cref="OwnedSteamGames"/>.
 /// </summary>
@@ -44,6 +45,12 @@ public class LibraryScanner
         Run("epic", "Epic", ScanEpic);
         Run("gog", "GOG", ScanGog);
         Run("xbox", "Xbox", ScanXbox);
+        Run("battlenet", "Battle.net", BattleNet.ScanInstalled);
+        Run("ubisoft", "Ubisoft", Ubisoft.ScanInstalled);
+        Run("ea", "EA", EaApp.ScanInstalled);
+        // Last: a Rockstar game bought on Steam or Epic runs through the Rockstar launcher too, and a
+        // folder another store already has is that store's game (see Rockstar.ScanInstalled).
+        Run("rockstar", "Rockstar", () => Rockstar.ScanInstalled(games));
         return games;
     }
 

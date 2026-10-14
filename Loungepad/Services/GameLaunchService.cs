@@ -8,7 +8,8 @@ namespace Loungepad.Services;
 /// <summary>
 /// Orchestrates a game session:
 ///  1. optionally switch the TV to be the Windows primary display,
-///  2. start the game (direct exe, or steam:// / Epic URI),
+///  2. start the game (direct exe, a store's link -- steam://, Epic's, uplay://, origin2:// -- or
+///     Battle.net's or Rockstar's launcher),
 ///  3. find the actual game process (URI launches go through the store client),
 ///  4. nudge the game window onto the TV if it opened elsewhere,
 ///  5. wait for exit, restore the primary display, record playtime, hand focus back.
@@ -100,7 +101,7 @@ public class GameLaunchService
                 }
             }
 
-            Process? tracked = StartGame(game);
+            Process? tracked = StartGame(game, cts.Token);
 
             // A process we started ourselves is granted the right to take the foreground NOW,
             // while this window still is the foreground. GameStarted parks the launcher a moment
@@ -236,7 +237,7 @@ public class GameLaunchService
     public EmulatorCommand? ResolveEmulated(Game game, out string? problem) =>
         EmulatorLaunch.Resolve(game, _library.EmulatorFor(game), _library.FindRomFolder(game.RomFolderId), out problem);
 
-    private Process? StartGame(Game game)
+    private Process? StartGame(Game game, CancellationToken ct)
     {
         if (game.Emulated)
         {
@@ -253,9 +254,32 @@ public class GameLaunchService
             });
         }
 
-        // "Prefer direct launch" (user picked an exe in Manage) bypasses the store client.
+        // "Prefer direct launch" (user picked an exe in Manage) bypasses the store client. A classic
+        // Battle.net game (Diablo II, Warcraft III) has no client to go through.
         bool direct = game.ExePath is not null && File.Exists(game.ExePath)
-                      && (game.Platform is "GOG" or "Manual" || game.PreferDirectLaunch);
+                      && (game.Platform is "GOG" or "Manual" || game.PreferDirectLaunch
+                          || (game.Platform == BattleNet.Platform && !BattleNet.LaunchesThroughClient(game)));
+
+        if (!direct && BattleNet.LaunchesThroughClient(game))
+        {
+            // The client may need starting and signing in before it takes the launch, which can be
+            // most of a minute; that waits beside the session, which is already looking for the
+            // game's process in its folder. Abandon (a close from the library) cancels it.
+            _ = Task.Run(async () =>
+            {
+                try { await BattleNet.StartAsync(game, ct); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Log.Info($"Battle.net launch of {game.Title} failed: {ex.Message}"); }
+            });
+            return null;
+        }
+
+        if (!direct && game.Platform == Rockstar.Platform)
+        {
+            // Through the Rockstar Games Launcher, which stays in the tray: not the session's process.
+            Rockstar.Start(game);
+            return null;
+        }
 
         if (!direct && game.LaunchUri is not null)
         {
@@ -265,7 +289,10 @@ public class GameLaunchService
                 Process.Start(new ProcessStartInfo("explorer.exe", $"\"{game.LaunchUri}\"") { UseShellExecute = true });
                 return null;
             }
-            if (game.Platform is "Steam" or "Epic")
+            // The stores' own links: steam://rungameid, Epic's apps/…?action=launch, uplay://launch,
+            // origin2://game/launch, and battlenet://game/… for a Battle.net game newer than the
+            // product table. Each opens the store's client, which starts the game.
+            if (game.Platform is "Steam" or "Epic" or Ubisoft.Platform or EaApp.Platform or BattleNet.Platform)
             {
                 Process.Start(new ProcessStartInfo(game.LaunchUri) { UseShellExecute = true });
                 return null; // real process found later via install dir
