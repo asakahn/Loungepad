@@ -14,7 +14,13 @@ public static class AddonKind
 {
     public const string Theme = "theme";
     public const string Extension = "extension";
-    public static bool IsValid(string? kind) => kind is Theme or Extension;
+    /// <summary>A community action layout (docs/ACTION-SHARING.md): listed in the same index, but
+    /// never installed as a folder. It is read into a preview under a program's wheel, and an
+    /// import is what stores it.</summary>
+    public const string Actions = "actions";
+    public static bool IsValid(string? kind) => kind is Theme or Extension or Actions;
+    /// <summary>What Settings → Add-ons lists and installs: themes and extensions.</summary>
+    public static bool IsInstallable(string? kind) => kind is Theme or Extension;
 }
 
 /// <summary>
@@ -140,6 +146,18 @@ public class CatalogueEntry
     /// <summary>Where the files are, ending in a slash; every file is Base + Path.</summary>
     public string Base { get; set; } = "";
     public List<CatalogueFile> Files { get; set; } = new();
+    /// <summary>An action layout's program: its name and exe names, matched to an app's.</summary>
+    public ActionLayoutApp? App { get; set; }
+    public CatalogueLayoutCounts? Counts { get; set; }
+    public string? Fingerprint { get; set; }
+}
+
+/// <summary>An action layout's size, for its line in the list before anything is downloaded.</summary>
+public class CatalogueLayoutCounts
+{
+    public int Tabs { get; set; }
+    public int Actions { get; set; }
+    public int Buttons { get; set; }
 }
 
 public class CatalogueFile

@@ -132,7 +132,17 @@ at `https://api.loungepad.app/v1/addons/` through the metadata service:
 | `POST /v1/addons/like` | `{ key, on }`: `on: false` takes a like back. Likes never go below zero |
 
 Every request needs the launcher's `X-Loungepad-Client: 1` header, and only keys the repository's
-index lists are accepted.
+index lists are accepted. Keys are `theme:<id>`, `extension:<id>` and `actions:<id>`.
+
+## Action layouts
+
+The repository also holds **action layouts**: a program's keyboard shortcuts on tabs, the wheel
+Settings → Actions arranges, shared (`actions/<id>/layout.json`, CC0). They are not add-ons in the
+sense of this page: Settings → Add-ons does not list them, and nothing is installed. They are found
+under the program's own wheel (**Y Options → Community layouts**), shown in the same preview as a file or a
+copy from another app, and the import stores what they bring in. How to send one in is in the
+repository's README; the format, the checks, the duplicate rules and the threats are in
+[Sharing actions](ACTION-SHARING.md).
 
 ## Writing an extension
 

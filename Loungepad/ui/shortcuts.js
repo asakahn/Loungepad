@@ -12,8 +12,8 @@
  *   2. Settings → Shortcuts. The editor IS the wheel: the tab's shortcuts round the ring exactly
  *      as the Power Wheel lays them out, a dashed + spoke where the next one will go, the tabs
  *      across the top and the highlighted shortcut's details beside it. A edits (the form sheet,
- *      over the wheel), Y picks a shortcut up to slide it round the ring or carry it to another
- *      tab, X is the tab's options, LB/RB turn the tab. A mouse drags, and the joystick mouse
+ *      over the wheel), X picks a shortcut up to slide it round the ring or carry it to another
+ *      tab, Y is the options card, LB/RB turn the tab. A mouse drags, and the joystick mouse
  *      can rest on any control of the tab strip for A to press it.
  *
  *   3. The pickers: what to open (an app from the Start menu, a program, a game, a folder, a file,
@@ -354,17 +354,23 @@ const scModel = {
     sub: n ? `Its ${n === 1 ? "shortcut goes" : n + " shortcuts go"} with it` : "It is empty",
     body: n ? "The shortcuts on it go too. Nothing on the PC is touched." : "It has nothing on it.",
   }),
-  tabOptionsExtra: () => [
-    { cat: "EVERY TAB" },
-    {
-      label: "Restore default shortcuts", icon: "refresh", sub: "Every tab is replaced by the System tab Loungepad started with",
+  optionsHead: () => {
+    const tab = scTabs()[scUi.tab];
+    return { kicker: "OPTIONS", title: "Shortcuts", sub: tab ? `${tab.name} tab · ${(tab.items || []).length} of ${scMaxItems()}` : "",
+      iconHtml: `<span class="panel-app-icon">${iconSvg("bolt")}</span>` };
+  },
+  optionSections: () => [{
+    title: "Every tab",
+    items: [{
+      key: "sc:restore", label: "Restore default shortcuts", icon: "refresh", danger: true,
+      hint: "Every tab is replaced by the System tab Loungepad started with",
       action: () => askConfirm({
         title: "Restore the default shortcuts?", body: "Every tab and every shortcut you added goes, and the System tab comes back as it was.",
         yesLabel: "Restore", icon: "refresh", danger: true,
         onYes: () => { send({ cmd: "shortcutsReset" }); scUi.tab = 0; settingsIdx = 0; },
       }),
-    },
-  ],
+    }],
+  }],
   send: {
     move: (id, tabId, index) => send({ cmd: "shortcutMove", id, tabId, index }),
     tabAdd: (id, name, index) => send({ cmd: "shortcutTabAdd", id, name, index }),
@@ -617,7 +623,7 @@ function onShortcutIconPicked(m) {
 function scStartAdd() {
   const tab = scEditorTab();
   if (!tab) return;
-  if ((tab.items || []).length >= scMaxItems()) { toast(`A tab holds ${scMaxItems()}. X opens the tab's options, to add another`); return; }
+  if ((tab.items || []).length >= scMaxItems()) { toast(`A tab holds ${scMaxItems()}. Y opens the options, to add another tab`); return; }
   scPickAnything(picked => scAddItem(tab.id, picked), "Add a shortcut", null);
 }
 

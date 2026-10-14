@@ -28,7 +28,7 @@ const CLIENT_HEADER = "x-loungepad-client";
 const CLIENT_VALUE = "1";
 const INDEX_URL = "https://raw.githubusercontent.com/sukumar-v/loungepad-addons/main/index.json";
 const INDEX_TTL_MS = 10 * 60 * 1000;
-const KEY = /^(theme|extension):[a-z][a-z0-9-]{0,39}$/;
+const KEY = /^(theme|extension|actions):[a-z][a-z0-9-]{0,39}$/;
 const RATE_WINDOW = 60;   // seconds; WRITE_LIMIT's period in wrangler.toml
 // How often one address may change its mind about one add-on in a day. Enough to like, unlike and
 // like again a few times; few enough that a loop cannot walk a count anywhere.

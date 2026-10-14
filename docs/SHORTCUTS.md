@@ -74,21 +74,45 @@ rebuilt, so a moved shortcut slides to its new place.
 | | Pad | Keyboard | Mouse |
 |---|---|---|---|
 | Pick a spoke | D-pad, round the ring | arrows | hover |
+| Reach the tabs | Up from the top spoke, then Left / Right; Down comes back | the same, with arrows | hover |
 | Edit, or add on the + | A | Enter | click |
-| Move | Y, then the D-pad; LB / RB carry it to another tab; A drops, B puts it back | Y, arrows, Enter / Esc | drag onto the ring or a tab |
-| Tab options | X | X | the ⋯ on the active tab |
+| Move | X, then the D-pad; LB / RB carry it to another tab; A drops, B puts it back | X, arrows, Enter / Esc | drag onto the ring or a tab |
+| Move a tab | X with the highlight on the tab, then Left / Right or LB / RB; A drops, B puts it back | X on the tab, arrows, Enter / Esc | rest on the tab and press X |
+| Options | Y | Y | the Options button at the end of the tab strip |
 | Turn the tab | LB / RB | [ / ] | click a tab |
 | Remove | the edit sheet | Delete | the edit sheet |
 | Rename | the edit sheet | F2 | the edit sheet |
 | Back to the categories | B | Esc | click a category |
 
-Every control of the tab strip (the tabs, the ⋯, + New tab, the shoulders) is a focusable that the
-D-pad never visits. In the launcher a pad's A is the page's A, never a click, and the joystick mouse
-only moves the pointer, so a control the pointer cannot make the highlight cannot be pressed from
-the pad at all: that was + New tab working with a real mouse and not with the stick.
+**The options are a card of buttons** (`weTabOptions`, a panel: `openPanel` in app.js), in
+labelled parts so it is plain which is which: "This tab · <name>" (Rename, New tab, Delete), then
+the model's own parts (`optionSections`): here "Every tab" with Restore default shortcuts; for an
+app's wheel under Settings → Actions, "Bring actions into <app>" as three tiles and the app's own
+buttons. Only the buttons are buttons; the highlighted one says what it does on the line under them
+all.
+
+**A tab moves the way an item does** (the user's call, Oct 13 2026), not from the options: with the
+highlight on a tab of the strip (the D-pad's, or the pointer resting on it), X picks it up
+(`weStartTabMove`; `ui.moving` with `kind: "tab"`, so an update from the host waits as it does for
+an item). Left and Right, or LB and RB, slide it along the strip, stopping at the ends; A or X drops
+it and the host hears one `tabMove`; B puts it back. The tab is drawn lifted with ‹ › either side,
+keeps the highlight wherever the pointer goes, and the card says how to move it.
+
+Every control of the tab strip (the tabs, + New tab, the shoulders, Options) is a focusable. In the
+launcher a pad's A is the page's A, never a click, and the joystick mouse only moves the pointer, so
+a control the pointer cannot make the highlight cannot be pressed from the pad at all: that was +
+New tab working with a real mouse and not with the stick.
 
 The D-pad goes round the ring on all four directions, as it does on the Power Wheel, so Left does
-not cross to the categories here; B does.
+not cross to the categories here; B does. The one way off the ring is Up from the top spoke (the
+first, at twelve o'clock), which goes up to the tab on screen (the user's ask, Oct 13 2026). On the
+strip, Left and Right walk the tabs, + New tab and Options, stopping at the ends (`weStripStep`; the
+shoulders' buttons are not stops, the pad has the real ones), and Down comes back to the top spoke.
+A on a tab shows it and leaves the highlight there, X picks it up, LB and RB carry a highlight on
+the tab on screen along with them. Which control the D-pad is on is the model's `ui.strip` (a focus
+key); the pointer resting anywhere replaces it, so the D-pad carries on from where the pointer was,
+and leaving the wheel clears it (`weReset`). The card beside the ring still describes the top
+spoke, as it does when the pointer rests on the strip.
 
 The edit sheet is the form sheet (`openForm`) over the wheel. `overlay-choice` comes before
 `overlay-form` in the document, so a list opened from the sheet (what it opens, the icon, another

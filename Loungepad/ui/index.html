@@ -447,6 +447,14 @@
     </div>
   </div>
 
+  <!-- ============ PANEL ============
+       A card of real buttons over Settings: a wheel's options and an import's preview (openPanel
+       in app.js; the cards are built in wheeledit.js and actions.js). Before the confirm and the
+       text field, which open over it. -->
+  <div class="overlay" id="overlay-panel" data-focus-scope>
+    <div class="panel-card" id="panelCard"></div>
+  </div>
+
   <!-- ============ CONFIRM ============ -->
   <!-- A dialog rather than a menu: the details, then A to go ahead and B to back out. -->
   <div class="overlay" id="overlay-confirm">
@@ -535,7 +543,14 @@
     <div class="guide-card">
       <div class="quick-title mono" id="guideTitle">COUCH SETUP GUIDE</div>
       <div class="guide-body" id="guideBody"></div>
-      <div class="guide-foot"><div class="legend-item" data-press="B"><span class="btn-slot" data-btn="B"></span><span>Close</span></div></div>
+      <div class="guide-foot">
+        <!-- What's new only (showWhatsNew): the Discord invite, pressed with Y or a click. -->
+        <div class="guide-discord" id="guideDiscord" hidden>
+          <div class="pbtn" id="guideDiscordBtn" role="button"><span class="btn-slot" data-btn="Y"></span><span>Join the Discord</span></div>
+          <span class="guide-discord-why">Get help, share your couch setup and vote on what comes next</span>
+        </div>
+        <div class="legend-item" data-press="B"><span class="btn-slot" data-btn="B"></span><span>Close</span></div>
+      </div>
     </div>
   </div>
 

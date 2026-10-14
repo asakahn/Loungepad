@@ -956,11 +956,15 @@ Stop the scrolled grid from clipping through the All games header
   host-only and deliberately NOT in `CopySettings`, so neither a page save nor a restore brings the
   notes back. The page draws them on the couch guide's card (`showWhatsNew`, `notesHtml`: headings,
   items, bold, code, links as text, everything escaped first) without the download section and
-  the changelog link; `openGuide` puts the guide's own title and text back.
+  the changelog link; `openGuide` puts the guide's own title and text back. The notes carry a
+  **Join the Discord** button in the footer (`#guideDiscord`, Y or a click; the user's ask, Oct 13
+  2026, to bring people to the server), which `showWhatsNew` shows and `openGuide` hides. The card
+  stays up after it, so the notes are still there when the user comes back from the browser.
 - **The Discord invite is `https://discord.gg/a6gngxS9b4`**: the README's badge and links, the
-  GitHub About text, the website footer, the issue chooser and Settings → General's Community
-  section, which sits above Startup & lock screen so Exit Loungepad stays the last row (the user's
-  call). `openDiscord`: the host holds the URL, parks, and opens it in the browser.
+  GitHub About text, the website footer, the issue chooser, the What's new card's button and
+  Settings → General's Community section, which sits above Startup & lock screen so Exit Loungepad
+  stays the last row (the user's call). `openDiscord`: the host holds the URL, parks, and opens it
+  in the browser.
 - **The input service is updated along with the launcher, with Windows' approval** (Oct 9 2026, the
   user's ask). The launcher installs the service published with its own release, so the installed
   one is due an update whenever its exe's file version (`InputServiceSetup.InstalledVersion`;
@@ -2022,15 +2026,36 @@ Stop the scrolled grid from clipping through the All games header
 - **The Shortcuts spoke opens a wheel the user arranges** (Oct 13 2026, the user's ask; branch
   `shortcut-wheels`; `docs/SHORTCUTS.md` is the design). Tabs of up to eight, spread evenly like the
   action wheel (the user picked flowing over fixed slots), plain named tabs (no per-app tabs), an
-  optional button per shortcut, and the editor in Settings → Shortcuts is the wheel itself. **Y
-  moves, X is the tab options** (the user's calls, Oct 13 2026, after Menu and then the swap), and
-  Remove lives in the edit sheet and on Delete.
+  optional button per shortcut, and the editor in Settings → Shortcuts is the wheel itself. **X
+  moves, Y is the options card** (the user's calls, Oct 13 2026: Menu, then Y/X, then swapped back
+  to X/Y the same evening with the options redesigned), and Remove lives in the edit sheet and on
+  Delete. The strip ends in a labelled **Options** button with Y drawn on it; the ⋯ on the active
+  tab is gone.
+- **The options card and the import screen are panels** (`openPanel` in app.js, `#overlay-panel`,
+  the user's ask, Oct 13 2026: "anything that's not clickable shouldn't be a button"). A panel is a
+  card where only `[data-pact]` elements (`panelBtn`) are buttons, with a fill and an edge; the
+  rest is flat text and pictures. The D-pad moves among the buttons spatially (`navMove` with the
+  panel as the active scope), A or a click presses, hover highlights. The options card
+  (`weTabOptions` → `weOptionSections`) is labelled parts: "This tab · <name>", then the model's
+  `optionSections()` (an app's "Bring actions into <app>" as three tiles, then the app's own;
+  the shortcuts' "Every tab"), with the highlighted button's words on a line under them all. Every
+  option closes the card first, since what it opens (a list, the text field, a confirm) has to be
+  on top. `overlay-panel` sits before `overlay-confirm`. **Tabs are moved with X on the tab itself**,
+  not from the card (the user's call, Oct 13 2026): `ui.moving = { kind: "tab", … }`, so every guard
+  that holds a host update during an item's move holds it for a tab's too; anything that reads
+  `ui.moving` as an item has to check `kind` first.
 - **A control the pointer cannot highlight cannot be pressed from the pad.** In the launcher a pad's
   A is the page's A, never a click, and the joystick mouse only moves the pointer; hover makes a
   focusable the highlight and A presses the highlight. The tab strip's + New tab was a plain
   clickable and worked with a real mouse only (the user's report). Every control in the strip is a
-  `data-focusable` now, outside the D-pad's way (`scStripUnderPointer`, `scStripAct`). The Add-ons
-  tab strip is still plain clickables.
+  `data-focusable` now (`weStripUnderPointer`, `weStripAct`). The Add-ons tab strip is still plain
+  clickables.
+- **The D-pad reaches the editor's tab strip with Up off the top spoke** (the user's ask, Oct 13
+  2026), and only that way: the ring still goes round on all four directions. On the strip Left and
+  Right walk the tabs, + New tab and Options (`weStripStep`, stopping at the ends), Down returns to
+  the top spoke. The D-pad's place there is `ui.strip` (a focus key), which `weRender` honours after
+  a resting pointer and before the spoke; the pointer resting on anything replaces it, and `weReset`
+  clears it. Delete and F2 do nothing while the highlight is on the strip: there is no item there.
 - **Icons are Automatic or a picture from the PC** (the user's call: no list of glyphs).
   `ShortcutIcons` makes any WIC picture, .ico or program icon a PNG of at most 128 px in
   `shortcut-icons` beside shortcuts.json (`ic-<id>-<rand>.png`, `IconFile`), and fetches a website's
@@ -2184,7 +2209,8 @@ Stop the scrolled grid from clipping through the All games header
   wheel in the wheel editor, `acModel`). The grid is the same scroller with `.apps-grid`; tiles are
   rows with `tile: true` so `settingsInput`, `syncSettingsPane` and the highlight keys work
   unchanged. B on a wheel goes back to the grid on that app's tile (`actionsBack`). The app's own
-  options (restore defaults, rename or remove an app the user added) are under the tab options, X.
+  options (save to a file, undo an import, restore defaults, rename or remove an app the user
+  added) are on the options card, Y.
   The live wheel's pages are the app's tabs then Everywhere's, empty ones left out, the pager naming
   them (`centerPager` keeps the one in force in view, both wheels).
 - The key picker takes a real keyboard too (capture-phase keydown in actions.js, before app.js's
@@ -2199,6 +2225,25 @@ Stop the scrolled grid from clipping through the All games header
   migration, new defaults landing in a user's layout, buttons only from what is on a wheel.
   `ActionService` takes a file path for it, so it never touches the real `actions.json` (the run
   checks it is unchanged).
+- **Bringing actions in is `docs/ACTION-SHARING.md`** (copying another app's wheel, files of
+  actions and community layouts from `loungepad-addons`' `actions/`, all built Oct 13 2026; the
+  stats worker's `actions` key is not deployed yet). Everything goes through one door:
+  an `ActionLayout` cleaned by `ActionLayouts.Clean`, held by `ActionService.Hold` under a token, and
+  `Plan` for both the preview and `Import`, so the sheet and the result cannot disagree; the page
+  sends a token, never actions. **A chord the app's pack knows arrives as the pack's own action,
+  under the pack's name**: a layout arranges an app's own actions and never relabels them. Danger
+  for anything Loungepad did not ship comes from the chord (`ShortcutKeys.IsDestructive`), never the
+  name. Every edit goes through `Commit`, which drops `BeforeImport`, so the undo is one level and
+  ends at the next change; `Tidy` keeps an entry holding one. The held import is `_held`: `_pending`
+  is the chord logic's. A file must declare its `format` (`ActionLayouts.Parse` reads it as a
+  `JsonNode` first, because the class's default would otherwise fill one in for any JSON of the
+  right shape). The harness is `import-harness` (118 checks, same shape as `ac-harness`), plus
+  `catalogue-harness` (18: `AddonService` against an index `build-index.mjs` wrote, served from
+  loopback). **The add-ons repository checks layouts with a JavaScript copy of the chord rules**
+  (`tools/actions-lib.mjs`) and a copy of the launcher's data (`tools/launcher-data.json`, from
+  `node tools/action-data.mjs`): refresh that copy whenever a pack, `ShortcutKeys.Named` or
+  `tests/shortcut-keys-vectors.json` changes, and add a vector for any new key rule, since the
+  vectors are the only thing holding the two copies together.
 
 ## The Loungepad keyboard: blocks, suggestions, options
 

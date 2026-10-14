@@ -782,6 +782,102 @@ public class UiBridge
                 break;
             }
 
+            // ---- bringing actions in: a copy from another app (docs/ACTION-SHARING.md) ----
+
+            case "actionsImportPreview":
+            {
+                var target = _window.Actions.Find(msg["target"]?.GetValue<string>() ?? "");
+                var src = msg["source"];
+                var kind = src?["kind"]?.GetValue<string>();
+                if (target is null) break;
+                if (kind == "catalogue")
+                {
+                    if (target.Id == ActionPacks.EverywhereId) { PushToast("Actions cannot be brought into that app"); break; }
+                    PreviewCatalogueLayout(target, src!["id"]?.GetValue<string>() ?? "");
+                    break;
+                }
+                if (kind != "app") break;
+                var from = _window.Actions.Find(src!["appId"]?.GetValue<string>() ?? "");
+                var tabId = src["tabId"]?.GetValue<string>();
+                // Everywhere is never copied from or into: its actions are on every app's wheel
+                // already, and its buttons answer in every program.
+                if (from is null || from.Id == target.Id || from.Id == ActionPacks.EverywhereId || target.Id == ActionPacks.EverywhereId)
+                {
+                    PushToast("Those actions cannot be copied there");
+                    break;
+                }
+                var tab = tabId is null ? null : from.Tabs.FirstOrDefault(t => t.Id == tabId);
+                var notes = new List<string>();
+                if (Cleaned(ActionLayouts.FromApp(from, tabId), notes) is { } layout)
+                    PushImportPreview(target, layout, notes, "app", "app:" + from.Id, tab is null ? from.Name : $"{from.Name} · {tab.Name}");
+                break;
+            }
+
+            // A file of actions: from an app's tab options (into that app), or from the grid's "Add
+            // an app" (into the program the file names, which may have to be added first).
+            case "actionsImportFile":
+                ImportActionsFile(msg["target"]?.GetValue<string>());
+                break;
+
+            case "actionsImportAddApp":
+            {
+                var held = _importFile;
+                if (held is null || held.Token != (msg["token"]?.GetValue<string>() ?? "")) { PushToast("Choose the file again"); break; }
+                _importFile = null;
+                try
+                {
+                    var (id, existed) = _window.Actions.AddApp(held.Layout.App.Exes[0], held.Layout.App.Name.Length > 0 ? held.Layout.App.Name : null);
+                    PushActions();
+                    Push(new { type = "actionAppAdded", id, existed });
+                    DetectApps();
+                    if (_window.Actions.Find(id) is { } app) PushImportPreview(app, held.Layout, held.Notes, "file", held.Source, held.Label);
+                }
+                catch (Exception ex) { PushToast($"Could not add that program: {ex.Message}"); }
+                break;
+            }
+
+            case "actionsExport":
+            {
+                var app = _window.Actions.Find(msg["appId"]?.GetValue<string>() ?? "");
+                if (app is not null && app.Id != ActionPacks.EverywhereId) ExportActions(app);
+                break;
+            }
+
+            case "actionsImport":
+            {
+                var result = _window.Actions.Import(msg["token"]?.GetValue<string>() ?? "", msg["mode"]?.GetValue<string>() == "replace",
+                    msg["buttons"]?.GetValue<bool>() ?? false, ImportRulesNow());
+                PushActions();
+                if (result is null) { PushToast("Nothing was brought in: the preview had run out, or nothing in it was new"); break; }
+                // A community layout counts as downloaded once it is on somebody's wheel, as an
+                // add-on does once its install passed its hashes.
+                if (CatalogueId(result.Source) is { } layoutId) _addons.LayoutImported(layoutId);
+                Push(new { type = "actionsImported", appId = result.AppId, tabId = result.FirstTabId, added = result.Added, restored = result.Restored, skipped = result.Skipped });
+                break;
+            }
+
+            // The community's layouts for an app: the repository's list (cached for hours) and its
+            // numbers, read first if they are stale, then pushed for the page's list.
+            case "actionsCatalogue":
+            {
+                var app = _window.Actions.Find(msg["appId"]?.GetValue<string>() ?? "");
+                if (app is null || app.Id == ActionPacks.EverywhereId) break;
+                var appId = app.Id;
+                _ = Task.Run(async () =>
+                {
+                    await _addons.RefreshCatalogueAsync(force: msg["refresh"]?.GetValue<bool>() == true);
+                    await _addons.RefreshCountsAsync(force: false);
+                    _ = _window.Dispatcher.BeginInvoke(() => PushLayoutsFor(appId));
+                });
+                break;
+            }
+
+            case "actionsUndoImport":
+                if (!_window.Actions.UndoImport(msg["appId"]?.GetValue<string>() ?? ""))
+                    PushToast("There is nothing to undo: the wheel has been changed since");
+                PushActions();
+                break;
+
             case "closeOverlay":
                 _window.CloseOverlay(msg["refocus"]?.GetValue<bool>() ?? true);
                 break;
@@ -3128,15 +3224,262 @@ public class UiBridge
         return new
         {
             maxItems = ActionPacks.MaxItems, maxTabs = ActionPacks.MaxTabs,
-            apps = acts.Apps.Select(a => new
+            apps = acts.Apps.Select(a =>
             {
-                id = a.Id, name = a.Name, exes = a.Exes, custom = a.Custom, pinned = a.Pinned,
-                installed = acts.Installed(a), modified = acts.Modified(a.Id), icon = icons ? acts.Icon(a) : null,
-                tabs = a.Tabs.Select(t => new { id = t.Id, name = t.Name, items = t.Actions.Select(Wire) }),
-                // The pack's actions taken off the wheel: "Add an action" offers them first.
-                spare = a.Spare.Select(Wire),
+                var (canUndo, from) = acts.ImportState(a.Id);
+                return new
+                {
+                    id = a.Id, name = a.Name, exes = a.Exes, custom = a.Custom, pinned = a.Pinned,
+                    installed = acts.Installed(a), modified = acts.Modified(a.Id), icon = icons ? acts.Icon(a) : null,
+                    tabs = a.Tabs.Select(t => new { id = t.Id, name = t.Name, items = t.Actions.Select(Wire) }),
+                    // The pack's actions taken off the wheel: "Add an action" offers them first.
+                    spare = a.Spare.Select(Wire),
+                    // The last import, while it can still be undone, and where it came from.
+                    canUndoImport = canUndo,
+                    importedFrom = ImportSourceName(from),
+                    importedKind = from?.Split(':')[0],
+                    // The community's layouts for it in the cached list: the menu can say how many
+                    // without a request. The list itself is read when it is opened.
+                    communityLayouts = a.Id == ActionPacks.EverywhereId ? 0 : _addons.LayoutsFor(a.Exes).Count,
+                };
             }),
         };
+    }
+
+    /// <summary>"app:firefox" as the page names it, "Firefox"; "file:Thorium.actions.json" as the
+    /// file's name.</summary>
+    private string? ImportSourceName(string? source) => source switch
+    {
+        null => null,
+        _ when source.StartsWith("app:", StringComparison.Ordinal) => _window.Actions.Find(source[4..])?.Name ?? "another app",
+        _ when source.StartsWith("file:", StringComparison.Ordinal) => source[5..],
+        _ when CatalogueId(source) is { } id => _addons.CatalogueEntry(AddonKind.Actions, id)?.Name ?? id,
+        _ => null,
+    };
+
+    /// <summary>"catalogue:thorium-sofa@1.0.0" → "thorium-sofa".</summary>
+    private static string? CatalogueId(string? source)
+    {
+        if (source is null || !source.StartsWith("catalogue:", StringComparison.Ordinal)) return null;
+        var rest = source["catalogue:".Length..];
+        var at = rest.IndexOf('@');
+        return at < 0 ? rest : rest[..at];
+    }
+
+    /// <summary>The community's layouts for one app, as the page's list draws them: its name, who made
+    /// it, how big it is, its numbers, and whether this launcher is new enough for it.</summary>
+    private void PushLayoutsFor(string appId)
+    {
+        var app = _window.Actions.Find(appId);
+        if (app is null) return;
+        var layouts = _addons.LayoutsFor(app.Exes).Select(e =>
+        {
+            var key = AddonService.KeyOf(e.Kind, e.Id);
+            var (downloads, likes, liked) = _addons.CountsOf(key);
+            return new
+            {
+                id = e.Id, key, name = e.Name, summary = e.Summary, author = e.Author, version = e.Version,
+                tabs = e.Counts?.Tabs ?? 0, actions = e.Counts?.Actions ?? 0, buttons = e.Counts?.Buttons ?? 0,
+                downloads, likes, liked,
+                needs = _addons.NeedsNewerLauncher(e.MinLauncher) ? e.MinLauncher : null,
+            };
+        }).ToList();
+        Push(new { type = "actionsCatalogue", appId, layouts, error = _addons.CatalogueError });
+    }
+
+    /// <summary>
+    /// A community layout into <paramref name="target"/>: downloaded and checked against the hash in
+    /// the repository's list off the UI thread, then read and cleaned like any file. Nothing of it is
+    /// written to disk; the import stores what it brings in.
+    /// </summary>
+    private void PreviewCatalogueLayout(ActionApp target, string id)
+    {
+        var targetId = target.Id;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var (entry, bytes) = await _addons.DownloadLayoutAsync(id);
+                _ = _window.Dispatcher.BeginInvoke(() =>
+                {
+                    var app = _window.Actions.Find(targetId);
+                    if (app is null) return;
+                    ActionLayout raw;
+                    try { raw = ActionLayouts.Parse(bytes); }
+                    catch (InvalidDataException ex) { PushToast($"{entry.Name} cannot be brought in: {ex.Message}"); return; }
+                    var notes = new List<string>();
+                    if (Cleaned(raw, notes, entry.Name) is not { } layout) return;
+                    PushImportPreview(app, layout, notes, "catalogue", $"catalogue:{entry.Id}@{entry.Version}", layout.Title ?? entry.Name,
+                        AddonService.KeyOf(AddonKind.Actions, entry.Id));
+                });
+            }
+            catch (Exception ex)
+            {
+                var say = ex is System.Net.Http.HttpRequestException or TaskCanceledException ? "Could not reach the add-ons repository" : ex.Message;
+                _ = _window.Dispatcher.BeginInvoke(() => PushToast(say));
+            }
+        });
+    }
+
+    /// <summary>A layout through <see cref="ActionLayouts.Clean"/>, or null with the reason shown.</summary>
+    private ActionLayout? Cleaned(ActionLayout raw, List<string> notes, string? what = null)
+    {
+        try { return ActionLayouts.Clean(raw, notes); }
+        catch (InvalidDataException ex)
+        {
+            PushToast(what is null ? ex.Message : $"{what} cannot be brought in: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>A file chosen in the import's Open dialog, waiting while the page asks whether to
+    /// add the program it names.</summary>
+    private sealed record HeldFile(string Token, ActionLayout Layout, List<string> Notes, string Source, string Label);
+    private HeldFile? _importFile;
+
+    /// <summary>
+    /// Windows' Open dialog for a file of actions, read with its limit and cleaned. With a target,
+    /// a preview into that app, whatever program the file was made for. Without one (the grid), the
+    /// app the file names: at once when the grid has it, else after the page asks to add it.
+    /// </summary>
+    private void ImportActionsFile(string? targetId)
+    {
+        var target = targetId is null ? null : _window.Actions.Find(targetId);
+        if (targetId is not null && (target is null || target.Id == ActionPacks.EverywhereId)) { PushToast("Actions cannot be brought into that app"); return; }
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = target is null ? "Choose a file of actions" : $"Choose a file of actions for {target.Name}",
+            Filter = $"Loungepad actions (*{ActionLayouts.FileExtension})|*{ActionLayouts.FileExtension}|JSON files (*.json)|*.json|All files (*.*)|*.*",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        };
+        if (!ShowDialog(dlg)) return;
+        var name = Path.GetFileName(dlg.FileName);
+        ActionLayout raw;
+        try { raw = ActionLayouts.ReadFile(dlg.FileName); }
+        catch (InvalidDataException ex) { PushToast($"{name} cannot be brought in: {ex.Message}"); return; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { PushToast($"{name} could not be read: {ex.Message}"); return; }
+        var notes = new List<string>();
+        if (Cleaned(raw, notes, name) is not { } layout) return;
+        var source = "file:" + name;
+        var label = layout.Title ?? (name.EndsWith(ActionLayouts.FileExtension, StringComparison.OrdinalIgnoreCase)
+            ? name[..^ActionLayouts.FileExtension.Length] : Path.GetFileNameWithoutExtension(name));
+        if (target is not null) { PushImportPreview(target, layout, notes, "file", source, label); return; }
+
+        var match = layout.App.Exes.Select(e => _window.Actions.ForExe(e)).FirstOrDefault(a => a is not null);
+        if (match is not null && _window.Actions.Installed(match)) { PushImportPreview(match, layout, notes, "file", source, label); return; }
+        if (layout.App.Exes.Count == 0)
+        {
+            PushToast("That file does not say which program it is for. Open the program's wheel, then Y Options, A file");
+            return;
+        }
+        var token = Guid.NewGuid().ToString("N");
+        _importFile = new HeldFile(token, layout, notes, source, label);
+        Push(new
+        {
+            type = "actionsImportAddApp", token, label,
+            name = match?.Name ?? (layout.App.Name.Length > 0 ? layout.App.Name : layout.App.Exes[0]),
+            exe = layout.App.Exes[0],
+        });
+    }
+
+    /// <summary>
+    /// Windows' Save dialog for an app's wheel, written as a layout: the tabs and actions, and the
+    /// program's product name from its exe when the path is known. Nothing else about the PC goes
+    /// in -- no path, no icon, no ids -- and the author is left for whoever shares it to fill in.
+    /// </summary>
+    private void ExportActions(ActionApp app)
+    {
+        var raw = ActionLayouts.FromApp(app);
+        raw.Title = app.Name;
+        raw.App.Product = ActionService.ProductName(_window.Actions.ProgramPath(app));
+        var notes = new List<string>();
+        if (Cleaned(raw, notes) is not { } layout) return;
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = $"Save {app.Name}'s actions",
+            Filter = $"Loungepad actions (*{ActionLayouts.FileExtension})|*{ActionLayouts.FileExtension}|All files (*.*)|*.*",
+            FileName = ActionLayouts.FileName(app.Name),
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            AddExtension = false,
+            OverwritePrompt = true,
+        };
+        if (!ShowDialog(dlg)) return;
+        // The dialog only appends the part after the last dot; a name typed bare gets the whole one.
+        var path = dlg.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? dlg.FileName : dlg.FileName + ActionLayouts.FileExtension;
+        try
+        {
+            File.WriteAllText(path, ActionLayouts.ToJson(layout));
+            var left = layout.Tabs.Sum(t => t.Actions.Count) < app.Actions.Count();
+            PushToast($"Saved as {Path.GetFileName(path)}{(left ? ". Actions with no shortcut are left out" : "")}");
+        }
+        catch (Exception ex) { PushToast($"Could not save it: {ex.Message}"); }
+    }
+
+    private ActionService.ImportRules ImportRulesNow()
+    {
+        var s = _settings.Settings;
+        return new ActionService.ImportRules(s.MinimizeCombo, s.ScreenshotCombo, s.KeyboardToggleButton,
+            string.Equals(s.KeyboardToggleMode, "Hold", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Hold a cleaned layout for an import into <paramref name="target"/>, and show the page what it
+    /// would do, all four ways (add or replace, with or without the layout's buttons) so a choice on
+    /// the sheet redraws at once. The import plans again when it happens, against the wheel then.
+    /// <paramref name="kind"/> is "app" for a copy, "file" for a file.
+    /// </summary>
+    private void PushImportPreview(ActionApp target, ActionLayout layout, List<string> notes, string kind, string source, string label,
+        string? catalogueKey = null)
+    {
+        var token = _window.Actions.Hold(target.Id, layout, source);
+        if (token is null) { PushToast("Actions cannot be brought into that app"); return; }
+        bool forThis = layout.App.Exes.Intersect(target.Exes, StringComparer.OrdinalIgnoreCase).Any();
+        // Made for this program, and named by its product: the copy on this PC should say the same.
+        // A different answer is a different program under the same exe name ("code", "launcher").
+        if (forThis && layout.App.Product is { } wanted && ActionService.ProductName(_window.Actions.ProgramPath(target)) is { } here
+            && !ActionService.SameProduct(wanted, here))
+            notes = notes.Append($"It was made for {wanted}, and the {target.Exes.FirstOrDefault() ?? target.Id}.exe on this PC is {here}. Check its shortcuts are the same").ToList();
+        var rules = ImportRulesNow();
+        object Variant(bool replace, bool buttons)
+        {
+            var plan = _window.Actions.Plan(target, layout, replace, buttons, rules);
+            return new
+            {
+                replace = plan.Replace,
+                tabs = plan.Tabs.Select(t => new
+                {
+                    name = t.Name, fits = t.Fits,
+                    items = t.Items.Select(i => new
+                    {
+                        name = i.Name, keys = i.Keys, desc = i.Desc, status = i.Status,
+                        button = i.Button, asked = i.Asked, dropped = i.Dropped, danger = i.Danger, win = i.Win,
+                        // What the layout gives it, even when it is skipped: a layout that is mostly
+                        // buttons for actions already on the wheel says so on the sheet.
+                        layoutButton = i.LayoutButton,
+                    }),
+                }),
+            };
+        }
+        Push(new
+        {
+            type = "actionsImportPreview",
+            token, kind,
+            target = new { id = target.Id, name = target.Name },
+            label,
+            // Made for another program: said on the sheet, since its chords may mean something else here.
+            madeFor = forThis ? null : (layout.App.Name.Length > 0 ? layout.App.Name : "another program"),
+            summary = layout.Summary,
+            author = layout.Author,
+            // A community layout: its key for a like from the sheet, and its numbers.
+            key = catalogueKey,
+            liked = catalogueKey is not null && _addons.CountsOf(catalogueKey).Liked,
+            likes = catalogueKey is null ? null : _addons.CountsOf(catalogueKey).Likes,
+            downloads = catalogueKey is null ? null : _addons.CountsOf(catalogueKey).Downloads,
+            notes,
+            empty = !target.Actions.Any(),
+            hasButtons = layout.Tabs.Any(t => t.Actions.Any(a => a.Button is not null)),
+            plans = new { add = Variant(false, false), addButtons = Variant(false, true), replace = Variant(true, false), replaceButtons = Variant(true, true) },
+        });
     }
 
     public void PushActionCaptured(string? combo) => Push(new { type = "actionCaptured", combo });

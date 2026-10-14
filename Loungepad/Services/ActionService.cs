@@ -147,6 +147,38 @@ internal class ActionService
     /// <summary>The app an exe name belongs to, or null. Everywhere is never the answer here.</summary>
     public ActionApp? ForExe(string? exe) => _snapshot.ForExe(exe);
 
+    /// <summary>The program's exe on this PC when it is known: the path it was added with, the one
+    /// detection found, or a running copy's. For its product name; never used to start anything.</summary>
+    public string? ProgramPath(ActionApp app)
+    {
+        if (app.Id == ActionPacks.EverywhereId) return null;
+        if (!string.IsNullOrEmpty(app.Path)) return app.Path;
+        if (_found.TryGetValue(app.Id, out var f) && !string.IsNullOrEmpty(f)) return f;
+        return RunningPath(app.Exes);
+    }
+
+    /// <summary>The name an exe gives itself in its version information ("Google Chrome"), or null.
+    /// A Store app's execution alias has none, and reads as null.</summary>
+    public static string? ProductName(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try
+        {
+            var name = FileVersionInfo.GetVersionInfo(path).ProductName?.Trim();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Whether two product names are the same program, as loosely as that can be judged:
+    /// letters and digits only, either inside the other. "Brave Browser" is "Brave".</summary>
+    public static bool SameProduct(string a, string b)
+    {
+        static string Key(string s) => new(s.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+        var (x, y) = (Key(a), Key(b));
+        return x.Length > 0 && y.Length > 0 && (x.Contains(y) || y.Contains(x));
+    }
+
     private ActionAppFile? Entry(string id) =>
         _file.Apps.FirstOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
 
@@ -182,7 +214,8 @@ internal class ActionService
                 var m = mine?.Actions.FirstOrDefault(x => x.Id == d.Id);
                 var c = (m ?? d).Clone();
                 c.Custom = false;
-                c.Danger = d.Danger;
+                // The pack's word for its own; a pack action given another chord is judged by it.
+                c.Danger = d.Danger || (c.Keys != d.Keys && ShortcutKeys.IsDestructive(c.Keys));
                 if (string.IsNullOrEmpty(c.Desc)) c.Desc = d.Desc;
                 c.Edited = m is not null && !SameAs(m, d);
                 packTab[d.Id] = tab.Id;
@@ -195,6 +228,7 @@ internal class ActionService
             var c = m.Clone();
             c.Custom = true;
             c.Edited = false;
+            c.Danger = ShortcutKeys.IsDestructive(c.Keys);
             actions[m.Id] = c;
             order.Add(m.Id);
         }
@@ -270,15 +304,22 @@ internal class ActionService
         if (e.Tabs is not null && e.Removed.Count == 0 && !e.Actions.Any(a => pack.Actions.All(d => d.Id != a.Id))
             && SameLayout(e.Tabs, Layout(pack.Tabs)))
             e.Tabs = null;
-        if (e.Untouched && !e.Pinned && string.IsNullOrEmpty(e.Path)) _file.Apps.Remove(e);
+        // An entry holding an import's undo stays, even when the import left it the pack's own.
+        if (e.Untouched && !e.Pinned && string.IsNullOrEmpty(e.Path) && e.BeforeImport is null) _file.Apps.Remove(e);
     }
 
     private static bool SameLayout(List<ActionTabLayout> a, List<ActionTabLayout> b) =>
         a.Count == b.Count && a.Zip(b).All(p => p.First.Id == p.Second.Id && p.First.Name == p.Second.Name && p.First.Items.SequenceEqual(p.Second.Items));
 
-    private void Commit(ActionAppFile? e = null)
+    /// <summary>Store an edit. Any edit of an app ends the chance to undo its last import: the
+    /// undo would put back the wheel from before it, and take the edit with it.</summary>
+    private void Commit(ActionAppFile? e = null, bool importing = false)
     {
-        if (e is not null) Tidy(e);
+        if (e is not null)
+        {
+            if (!importing) e.BeforeImport = null;
+            Tidy(e);
+        }
         Save();
         Rebuild();
     }
@@ -312,7 +353,7 @@ internal class ActionService
         {
             Id = id,
             Name = Truncate((incoming.Name ?? "").Trim(), 48),
-            Keys = ShortcutKeys.IsValid(incoming.Keys ?? "") ? Normalize(incoming.Keys!) : "",
+            Keys = ShortcutKeys.IsValid(incoming.Keys ?? "") ? ShortcutKeys.Normalize(incoming.Keys!) : "",
             Button = CleanButton(incoming.Button),
             Desc = CleanDesc(incoming.Desc),
         };
@@ -446,6 +487,8 @@ internal class ActionService
         e.Actions.Clear();
         e.Tabs = null;
         e.Removed.Clear();
+        e.ImportedFrom = null;
+        e.ImportedAt = null;
         Commit(e);
         return true;
     }
@@ -505,7 +548,7 @@ internal class ActionService
         name = Truncate(name.Trim(), 48);
         if (name.Length == 0) return false;
         entry.Name = name;
-        Commit();
+        Commit(entry);
         return true;
     }
 
@@ -517,15 +560,6 @@ internal class ActionService
     {
         var s = new string((desc ?? "").Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
         return s.Length == 0 ? null : Truncate(s, 120);
-    }
-
-    /// <summary>"Ctrl+Shift+T" spelt the way the page spells it, whatever was typed.</summary>
-    private static string Normalize(string keys)
-    {
-        var parts = ShortcutKeys.Parts(keys);
-        var order = new[] { "Ctrl", "Shift", "Alt", "Win" };
-        var mods = order.Where(m => parts.Take(parts.Count - 1).Contains(m, StringComparer.OrdinalIgnoreCase));
-        return string.Join("+", mods.Append(ShortcutKeys.CanonicalKey(parts[^1])));
     }
 
     /// <summary>A button combo in the launcher's own names and order, or null. Unknown names
@@ -555,6 +589,279 @@ internal class ActionService
     /// <summary>Bindings that can never fire: the click buttons on their own, and the Guide button,
     /// which Windows keeps. The page refuses them too; this is for a hand-edited file.</summary>
     public static bool IsReservedButton(string? combo) => combo is "A" or "B" or "Guide";
+
+    // ---- importing: another app's wheel (and later a file, or a community layout) ----
+    //
+    // docs/ACTION-SHARING.md. Every import is an ActionLayout already through ActionLayouts.Clean,
+    // held here under a token while the page shows what it would do; the page answers with the
+    // token and its two choices, never with a layout.
+
+    /// <summary>The system's own buttons, from the settings: a layout's button on one of them is
+    /// left off, since it would never fire. The bridge builds it for each preview and import.</summary>
+    public sealed record ImportRules(string? MenuCombo, string? ScreenshotCombo, string? KeyboardButton, bool KeyboardHold);
+
+    /// <summary>
+    /// One action as an import would leave it. <see cref="Status"/> is "new" (an action of the
+    /// user's, made by the import), "pack" (the app's own, put on the wheel), "have" (its chord is on
+    /// the wheel already), "twice" (its chord came earlier in the layout) or "noroom" (its tab is
+    /// past the last one an app holds). The last three are skipped.
+    /// </summary>
+    public sealed class ImportItem
+    {
+        public string Name { get; init; } = "";
+        public string Keys { get; init; } = "";
+        public string? Desc { get; init; }
+        public string Status { get; set; } = "";
+        /// <summary>The button it ends up with.</summary>
+        public string? Button { get; set; }
+        /// <summary>The button it was meant to have: the layout's, or with the layout's buttons
+        /// off, the one the pack gives its own action.</summary>
+        public string? Asked { get; set; }
+        /// <summary>Why <see cref="Asked"/> is left off, in words.</summary>
+        public string? Dropped { get; set; }
+        public bool Danger { get; init; }
+        /// <summary>A Win chord: it acts on Windows, not on the app.</summary>
+        public bool Win { get; init; }
+        /// <summary>The app's own action this is, for "pack".</summary>
+        public ActionDef? Pack { get; init; }
+        public string? LayoutButton { get; init; }
+        public bool Placed => Status is "new" or "pack";
+    }
+
+    public sealed class ImportTab
+    {
+        public string Name { get; init; } = "";
+        public bool Fits { get; set; }
+        public List<ImportItem> Items { get; } = new();
+    }
+
+    public sealed class ImportPlan
+    {
+        /// <summary>The wheel is replaced: asked for, or the app had nothing on it.</summary>
+        public bool Replace { get; init; }
+        public bool Buttons { get; init; }
+        public List<ImportTab> Tabs { get; } = new();
+        public IEnumerable<ImportItem> Placed => Tabs.Where(t => t.Fits).SelectMany(t => t.Items).Where(i => i.Placed);
+    }
+
+    public sealed record ImportResult(string AppId, string? FirstTabId, int Added, int Restored, int Skipped, string Source);
+
+    private sealed record PendingImport(string Token, string AppId, ActionLayout Layout, string Source, DateTime At);
+    private PendingImport? _held;
+    private static readonly TimeSpan PendingLife = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Hold a cleaned layout for an import into <paramref name="appId"/> and return its token. One
+    /// at a time: a new preview replaces the last. Null for an app that cannot take one; Everywhere
+    /// never does, since its actions and buttons answer in every program.
+    /// </summary>
+    public string? Hold(string appId, ActionLayout layout, string source)
+    {
+        var app = Find(appId);
+        if (app is null || app.Id == ActionPacks.EverywhereId) return null;
+        var token = Guid.NewGuid().ToString("N");
+        _held = new PendingImport(token, app.Id, layout, source, DateTime.UtcNow);
+        return token;
+    }
+
+    /// <summary>
+    /// What importing <paramref name="layout"/> into <paramref name="app"/> would do, without doing
+    /// it. The preview and the import both come from here, so they cannot disagree.
+    ///
+    /// In one app the same chord is the same action. A chord already on the wheel is skipped and
+    /// the user's name for it stays. A chord the app's pack knows, for an action not on the wheel,
+    /// is that pack action, with the pack's own name and words: a layout can arrange an app's own
+    /// actions and never relabel them. Anything else is a new action. In add mode each tab of the
+    /// layout becomes a tab after the user's; in replace mode (and always for an empty wheel) the
+    /// layout's tabs are the wheel. A button is kept only when nothing else answers to it.
+    /// </summary>
+    public ImportPlan Plan(ActionApp app, ActionLayout layout, bool replace, bool buttons, ImportRules rules)
+    {
+        replace |= !app.Actions.Any();
+        var onWheel = replace ? new List<ActionDef>() : app.Actions.ToList();
+        var onWheelIds = new HashSet<string>(onWheel.Select(a => a.Id));
+        var have = new HashSet<string>(onWheel.Where(a => ShortcutKeys.IsValid(a.Keys)).Select(a => ShortcutKeys.Normalize(a.Keys)), StringComparer.OrdinalIgnoreCase);
+        var packByChord = new Dictionary<string, ActionDef>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in ActionPacks.Find(app.Id)?.Actions ?? Enumerable.Empty<ActionDef>())
+            if (ShortcutKeys.IsValid(d.Keys)) packByChord.TryAdd(ShortcutKeys.Normalize(d.Keys), d);
+
+        var plan = new ImportPlan { Replace = replace, Buttons = buttons };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int room = ActionPacks.MaxTabs - (replace ? 0 : app.Tabs.Count);
+        foreach (var lt in layout.Tabs)
+        {
+            var tab = new ImportTab { Name = lt.Name };
+            foreach (var la in lt.Actions)
+            {
+                var chord = ShortcutKeys.Normalize(la.Keys);
+                var own = packByChord.TryGetValue(chord, out var d) && !onWheelIds.Contains(d.Id) ? d : null;
+                var status = !seen.Add(chord) ? "twice" : have.Contains(chord) ? "have" : own is not null ? "pack" : "new";
+                if (status != "pack") own = null;
+                tab.Items.Add(new ImportItem
+                {
+                    Name = own?.Name ?? la.Name,
+                    Keys = own?.Keys ?? chord,
+                    Desc = own is null ? la.Desc : own.Desc,
+                    Status = status,
+                    Pack = own,
+                    LayoutButton = la.Button,
+                    Danger = own?.Danger ?? ShortcutKeys.IsDestructive(chord),
+                    Win = ShortcutKeys.HasWin(chord),
+                });
+            }
+            // A tab with nothing to place takes no room; once the room is gone no later tab fits.
+            tab.Fits = tab.Items.Any(i => i.Placed) && room > 0;
+            if (tab.Fits) room--;
+            else foreach (var i in tab.Items.Where(i => i.Placed)) i.Status = "noroom";
+            plan.Tabs.Add(tab);
+        }
+
+        // Buttons in the order the actions come: what stays on the wheel keeps its own, and a
+        // button goes to the first action that asks for it.
+        var taken = new Dictionary<string, string>();
+        foreach (var a in onWheel)
+            if (CleanButton(a.Button) is { } b) taken.TryAdd(b, a.Name);
+        foreach (var i in plan.Placed)
+        {
+            i.Asked = buttons ? i.LayoutButton : i.Pack?.Button;
+            if (i.Asked is null) continue;
+            i.Dropped = ButtonProblem(i.Asked, rules, taken);
+            if (i.Dropped is not null) continue;
+            i.Button = i.Asked;
+            taken[i.Asked] = i.Name;
+        }
+        return plan;
+    }
+
+    /// <summary>Why an imported button would not do what it says, or null. Stricter than editing
+    /// by hand: an import never takes a button from anything the user set up.</summary>
+    private string? ButtonProblem(string combo, ImportRules rules, Dictionary<string, string> taken)
+    {
+        if (IsReservedButton(combo)) return combo == "Guide" ? "Windows keeps Guide for itself" : $"{combo} on its own is a click";
+        if (CleanButton(rules.MenuCombo) == combo) return "It is the menu combo";
+        if (!string.Equals(rules.ScreenshotCombo, "Off", StringComparison.OrdinalIgnoreCase) && CleanButton(rules.ScreenshotCombo) == combo)
+            return "It is the screenshot button";
+        if (!rules.KeyboardHold && CleanButton(rules.KeyboardButton) == combo) return "It opens the keyboard";
+        if (taken.TryGetValue(combo, out var who)) return $"“{who}” has it already";
+        if (Find(ActionPacks.EverywhereId)?.Actions.FirstOrDefault(a => CleanButton(a.Button) == combo) is { } ev)
+            return $"Everywhere's “{ev.Name}” has it";
+        var sc = _shortcutBindings.FirstOrDefault(s => CleanButton(s.Combo) == combo);
+        if (sc.Id is not null) return $"The shortcut “{sc.Name}” has it";
+        return null;
+    }
+
+    /// <summary>
+    /// Do what <see cref="Plan"/> says for the held layout, planned again against the wheel as it is
+    /// now. The entry from before is kept for <see cref="UndoImport"/>. Null when the token is not
+    /// the one held, has run out, or the import would place nothing.
+    /// </summary>
+    public ImportResult? Import(string token, bool replace, bool buttons, ImportRules rules)
+    {
+        var p = _held;
+        if (p is null || p.Token != token || DateTime.UtcNow - p.At > PendingLife) return null;
+        var app = Find(p.AppId);
+        if (app is null) return null;
+        var plan = Plan(app, p.Layout, replace, buttons, rules);
+        var placed = plan.Placed.ToList();
+        if (placed.Count == 0) return null;
+        _held = null;
+
+        var pack = ActionPacks.Find(app.Id);
+        var before = Entry(app.Id) is { } old
+            ? JsonSerializer.Deserialize<ActionAppFile>(JsonSerializer.Serialize(old))!
+            : new ActionAppFile { Id = app.Id, Name = app.Name, Exes = new List<string>(app.Exes) };
+        before.BeforeImport = null;
+
+        ActionAppFile e;
+        if (plan.Replace)
+        {
+            e = FileEntry(app.Id);
+            e.Actions.Clear();
+            e.Removed.Clear();
+            e.Tabs = new List<ActionTabLayout>();
+        }
+        else e = Arrange(app);
+
+        // An id is never one of the pack's (a custom action under a pack's id would be read as a
+        // change to that pack action), nor one the app has; a tab's never one the wheel has.
+        var ids = new HashSet<string>(app.Actions.Concat(app.Spare).Select(a => a.Id)
+            .Concat(pack?.Actions.Select(a => a.Id) ?? Enumerable.Empty<string>()));
+        var tabIds = new HashSet<string>(e.Tabs!.Select(t => t.Id));
+        var tabNames = new HashSet<string>(e.Tabs!.Select(t => t.Name), StringComparer.CurrentCultureIgnoreCase);
+        string? first = null;
+        foreach (var tab in plan.Tabs.Where(t => t.Fits))
+        {
+            var lt = new ActionTabLayout { Id = UniqueId(ActionLayouts.Slug(tab.Name, 24), "tab", tabIds), Name = UniqueTabName(tab.Name, tabNames) };
+            first ??= lt.Id;
+            foreach (var i in tab.Items.Where(i => i.Placed))
+            {
+                if (i.Pack is { } d)
+                {
+                    e.Removed.Remove(d.Id);
+                    e.Actions.RemoveAll(a => a.Id == d.Id);
+                    // The pack's own is stored only as far as it differs: here, only ever its button.
+                    if ((i.Button ?? "") != (d.Button ?? ""))
+                        e.Actions.Add(new ActionDef { Id = d.Id, Name = d.Name, Keys = d.Keys, Button = i.Button });
+                    lt.Items.Add(d.Id);
+                }
+                else
+                {
+                    var id = UniqueId(ActionLayouts.Slug(i.Name), "action", ids);
+                    e.Actions.Add(new ActionDef { Id = id, Name = Truncate(i.Name, 48), Keys = i.Keys, Desc = CleanDesc(i.Desc), Button = i.Button });
+                    lt.Items.Add(id);
+                }
+            }
+            e.Tabs!.Add(lt);
+        }
+        if (plan.Replace && pack is not null)
+        {
+            var on = new HashSet<string>(e.Tabs!.SelectMany(t => t.Items));
+            e.Removed = pack.Actions.Select(a => a.Id).Where(id => !on.Contains(id)).ToList();
+        }
+        e.BeforeImport = before;
+        e.ImportedFrom = p.Source;
+        e.ImportedAt = DateTime.UtcNow;
+        Commit(e, importing: true);
+        int restored = placed.Count(i => i.Pack is not null);
+        return new ImportResult(app.Id, first, placed.Count - restored, restored, plan.Tabs.Sum(t => t.Items.Count) - placed.Count, p.Source);
+    }
+
+    /// <summary>Put the app's entry back to how it was before its last import. Only until the next
+    /// edit of the app, which drops the copy; the pin and the path stay as they are now.</summary>
+    public bool UndoImport(string appId)
+    {
+        if (Entry(appId) is not { BeforeImport: { } before } e) return false;
+        e.Actions = before.Actions ?? new();
+        e.Tabs = before.Tabs;
+        e.Removed = before.Removed ?? new();
+        e.ImportedFrom = before.ImportedFrom;
+        e.ImportedAt = before.ImportedAt;
+        Commit(e);
+        return true;
+    }
+
+    /// <summary>Whether the app's last import can still be undone, and where it came from.</summary>
+    public (bool CanUndo, string? From) ImportState(string appId) =>
+        Entry(appId) is { } e ? (e.BeforeImport is not null, e.ImportedFrom) : (false, null);
+
+    private static string UniqueId(string stem, string fallback, HashSet<string> taken)
+    {
+        if (stem.Length == 0) stem = fallback;
+        var id = stem;
+        for (int n = 2; !taken.Add(id); n++) id = $"{stem}-{n}";
+        return id;
+    }
+
+    private static string UniqueTabName(string name, HashSet<string> taken)
+    {
+        var s = name;
+        for (int n = 2; !taken.Add(s); n++)
+        {
+            var suffix = " " + n;
+            s = Truncate(name, MaxTabName - suffix.Length).TrimEnd() + suffix;
+        }
+        return s;
+    }
 
     // ---- what is on this PC ----
 

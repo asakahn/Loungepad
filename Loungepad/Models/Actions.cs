@@ -118,6 +118,14 @@ public class ActionAppFile
     /// <summary>Pack actions taken off the wheel, so that a load does not put them back as new ones.</summary>
     public List<string> Removed { get; set; } = new();
 
+    /// <summary>This entry as it was before the last import, for "Undo the import": one level,
+    /// dropped by the next edit of the app. An entry that did not exist before is an empty one.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public ActionAppFile? BeforeImport { get; set; }
+    /// <summary>Where the last import came from: "app:firefox" for a copy. Kept after edits, so
+    /// the app can say where its wheel started.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ImportedFrom { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public DateTime? ImportedAt { get; set; }
+
     /// <summary>Nothing but the pin and the path: the pack exactly as shipped.</summary>
     [JsonIgnore] public bool Untouched => Actions.Count == 0 && Tabs is null && Removed.Count == 0;
 }
@@ -259,6 +267,39 @@ public static class ShortcutKeys
     /// <summary>True for a shortcut that needs no particular window in front: media keys, and any
     /// Win chord, which the shell takes whoever has the focus.</summary>
     public static bool IsSystemWide(string keys) => Parse(keys)?.SystemWide ?? false;
+
+    private static readonly string[] ModifierOrder = { "Ctrl", "Shift", "Alt", "Win" };
+
+    /// <summary>"Ctrl+Shift+T" spelt the way the page spells it, whatever was typed: the modifiers
+    /// in one order, then the key by its own name. Only for text that <see cref="IsValid"/>.</summary>
+    public static string Normalize(string keys)
+    {
+        var parts = Parts(keys);
+        if (parts.Count == 0) return "";
+        var mods = ModifierOrder.Where(m => parts.Take(parts.Count - 1).Contains(m, StringComparer.OrdinalIgnoreCase));
+        return string.Join("+", mods.Append(CanonicalKey(parts[^1])));
+    }
+
+    /// <summary>A chord that acts on Windows itself rather than on the program in front.</summary>
+    public static bool HasWin(string keys)
+    {
+        var parts = Parts(keys);
+        return parts.Take(parts.Count - 1).Contains("Win", StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Chords that close, quit or delete for good in most programs. Plain Delete is not
+    /// one: it is an editing key, and in File Explorer it goes to the Recycle Bin.</summary>
+    private static readonly HashSet<string> Destructive = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Alt+F4", "Ctrl+F4", "Ctrl+W", "Ctrl+Shift+W", "Ctrl+Q", "Ctrl+Shift+Q", "Shift+Delete",
+    };
+
+    /// <summary>
+    /// Whether an action Loungepad did not ship is drawn red on the wheel. A pack says this of its
+    /// own actions; anything else -- made by hand, copied, imported -- is judged by its chord, never
+    /// by its name, so a "Next tab" that is really Ctrl+W looks like what it does.
+    /// </summary>
+    public static bool IsDestructive(string keys) => IsValid(keys) && Destructive.Contains(Normalize(keys));
 
     /// <summary>Press it. False when the text is not a shortcut.</summary>
     public static bool Send(string keys)

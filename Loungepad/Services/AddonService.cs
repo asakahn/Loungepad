@@ -409,7 +409,7 @@ public class AddonService
             return new
             {
                 url = IndexUrl, fetchedAt = _catalogue?.FetchedAt, error = _catalogueError,
-                count = _catalogue?.Index.Addons.Count ?? 0, busy = _catalogueBusy,
+                count = _catalogue?.Index.Addons.Count(e => AddonKind.IsInstallable(e.Kind)) ?? 0, busy = _catalogueBusy,
                 // A cache from another URL is still shown; the page says where it came from.
                 stale = _catalogue is null || _catalogue.Url != IndexUrl || DateTime.UtcNow - _catalogue.FetchedAt > CatalogueFreshness,
             };
@@ -499,7 +499,21 @@ public class AddonService
         if (e.Icon is not null && !IsIconPath(e.Icon)) e.Icon = null;
         if (e.Permissions?.Hosts is { } hosts)
             e.Permissions.Hosts = hosts.Select(h => (h ?? "").Trim().ToLowerInvariant()).Where(h => HostPattern.IsMatch(h)).Distinct().ToList();
-        var required = e.Kind == AddonKind.Theme ? "theme.css" : "manifest.json";
+        if (e.Kind == AddonKind.Actions)
+        {
+            // Drawn in the list under a program's wheel before anything is downloaded: kept to the
+            // same text rule as the layout itself, and matched to apps on exe names alone.
+            e.Name = ActionLayouts.Text(e.Name, ActionLayouts.MaxTitle);
+            e.Summary = e.Summary is null ? null : ActionLayouts.Text(e.Summary, ActionLayouts.MaxSummary);
+            e.Author = e.Author is null ? null : ActionLayouts.Text(e.Author, ActionLayouts.MaxAuthor);
+            var exes = (e.App?.Exes ?? new()).Where(x => x is not null).Select(ActionService.ExeName)
+                .Where(x => x.Length is > 0 and <= ActionLayouts.MaxExe).Distinct().Take(ActionLayouts.MaxExes).ToList();
+            if (exes.Count == 0) return "names no program";
+            e.App = new ActionLayoutApp { Name = ActionLayouts.Text(e.App?.Name, ActionLayouts.MaxName), Exes = exes };
+            e.Icon = null;
+            e.Permissions = null;
+        }
+        var required = e.Kind switch { AddonKind.Theme => "theme.css", AddonKind.Actions => "layout.json", _ => "manifest.json" };
         if (!e.Files.Any(f => f.Path.Equals(required, StringComparison.OrdinalIgnoreCase))) return $"no {required}";
         return null;
     }
@@ -581,6 +595,8 @@ public class AddonService
     {
         var entry = Available.FirstOrDefault(e => KeyOf(e.Kind, e.Id) == key)
                     ?? throw new InvalidOperationException("That add-on is not in the repository's list");
+        if (!AddonKind.IsInstallable(entry.Kind))
+            throw new InvalidOperationException("That is an action layout: it is brought in from a program's wheel, under Settings → Actions");
         if (NeedsNewerLauncher(entry.MinLauncher))
             throw new InvalidOperationException($"Needs Loungepad {entry.MinLauncher}; this is {_launcher}");
         if (!BeginBusy(key, "downloading")) throw new InvalidOperationException("Already installing");
@@ -856,7 +872,8 @@ public class AddonService
             if (entry is not null) ApplyCounts(dto, counts, liked);
             list.Add(dto);
         }
-        foreach (var e in available)
+        // Action layouts are listed under each program's wheel, not here.
+        foreach (var e in available.Where(e => AddonKind.IsInstallable(e.Kind)))
         {
             var key = KeyOf(e.Kind, e.Id);
             if (installed.Any(a => a.Key == key)) continue;
@@ -873,6 +890,51 @@ public class AddonService
             list.Add(dto);
         }
         return list.OrderBy(d => d.Kind == AddonKind.Theme ? 0 : 1).ThenBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+    }
+
+    // ---- community action layouts (docs/ACTION-SHARING.md) ----
+
+    /// <summary>Why the repository's list could not be read the last time, or null.</summary>
+    public string? CatalogueError { get { lock (_gate) return _catalogueError; } }
+
+    /// <summary>The catalogue's action layouts for a program known by any of these exe names.</summary>
+    public List<CatalogueEntry> LayoutsFor(IEnumerable<string> exes)
+    {
+        var set = new HashSet<string>(exes, StringComparer.OrdinalIgnoreCase);
+        return Available.Where(e => e.Kind == AddonKind.Actions && e.App?.Exes.Any(set.Contains) == true)
+            .OrderBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// A layout's file, downloaded and checked against the hash in the index: the bytes an import
+    /// reads, held in memory and never written anywhere. Throws with a reason a person can read.
+    /// </summary>
+    public async Task<(CatalogueEntry Entry, byte[] Bytes)> DownloadLayoutAsync(string id, CancellationToken ct = default)
+    {
+        var entry = CatalogueEntry(AddonKind.Actions, id) ?? throw new InvalidOperationException("That layout is not in the repository's list");
+        if (NeedsNewerLauncher(entry.MinLauncher)) throw new InvalidOperationException($"It needs Loungepad {entry.MinLauncher}");
+        var file = entry.Files.FirstOrDefault(f => f.Path == "layout.json") ?? throw new InvalidDataException("The list names no layout.json for it");
+        var bytes = await DownloadAsync(entry.Base + file.Path, ActionLayouts.MaxFileBytes, ct);
+        if (Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() != file.Sha256)
+            throw new InvalidDataException("What arrived does not match the checksum in the repository's list");
+        return (entry, bytes);
+    }
+
+    /// <summary>An import from the catalogue was applied: counted as a download, as a verified
+    /// install is (the service decides whether this address counts today).</summary>
+    public void LayoutImported(string id) => _ = ReportDownloadAsync(KeyOf(AddonKind.Actions, id));
+
+    /// <summary>A key's numbers and whether this PC liked it, for a list outside Settings → Add-ons.
+    /// The numbers are null until the service has answered.</summary>
+    public (long? Downloads, long? Likes, bool Liked) CountsOf(string key)
+    {
+        lock (_gate)
+        {
+            var liked = _records.Liked.Contains(key);
+            if (_counts is null) return (null, null, liked);
+            var c = _counts.TryGetValue(key, out var found) ? found : new AddonCounts();
+            return (c.Downloads, c.Likes, liked);
+        }
     }
 
     // ---- downloads and likes (addons-stats/) ----

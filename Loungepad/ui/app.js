@@ -202,6 +202,7 @@ function repaintFocus() {
   else if (choiceState) renderChoice();
   else if (modsState) renderMods();
   else if (confirmState) renderConfirm();
+  else if (panelState) renderPanel();
   else if (formState) renderForm();
   else if (sessionState) { /* nothing on it takes the highlight */ }
   else if (actState) paintActFocus();
@@ -1546,8 +1547,8 @@ let guideOpen = false;
    while it boots, before actions.js has run. */
 let actionWheelOpen = false;
 let shortcutWheelOpen = false;           // the Power Wheel's Shortcuts wheel (shortcuts.js)
-let scUi = { tab: 0, moving: null, pending: null, drag: null, droppedAt: 0 };   // Settings → Shortcuts' editor
-let acUi = { tab: 0, moving: null, pending: null, drag: null, droppedAt: 0 };   // an app's wheel under Settings → Actions
+let scUi = { tab: 0, moving: null, pending: null, drag: null, droppedAt: 0, strip: null };   // Settings → Shortcuts' editor
+let acUi = { tab: 0, moving: null, pending: null, drag: null, droppedAt: 0, strip: null };   // an app's wheel under Settings → Actions
 let captureState = null;                 // { app, action, onDone, check, timer, note }
 let keyPick = null;                      // { onDone, mods: Set }
 let overlayTargetProcess = "";           // the exe behind the window a menu opened over; "" for none
@@ -1563,6 +1564,7 @@ let actState = null;                     // { gameId, idx, sessions }
 let sessionState = null;                 // { session, samples, unlocks, from }
 let dayState = null;                     // { key, idx } -- the Stats overview's Day sheet
 let formState = null;                    // { kind, kicker, title, sub, rows, idx, onClose } -- see openForm
+let panelState = null;                   // { kind, render, act, key, back, start, focus, foot, onClose } -- see openPanel
 // The first-run setup (onboarding.js), a view like Settings. Declared here for the same reason.
 let onboardState = null;                 // { step, from, info, vortex, pinPoll } -- see openOnboarding
 let statsUi = { tab: "overview", pane: "nav", idx: 0, period: "30d", achSort: "progress", from: "library", day: null };
@@ -2794,7 +2796,7 @@ let hWheelAccum = 0;
 
 function overlayOpen() {
   return inputOpen || filterOpen || !!gameMenu || collectOpen || manageOpen || !!choiceState || !!modsState || !!confirmState || guideOpen || !!mediaView
-    || !!captureState || !!keyPick || !!achState || !!actState || !!sessionState || !!dayState || !!formState;
+    || !!captureState || !!keyPick || !!achState || !!actState || !!sessionState || !!dayState || !!formState || !!panelState;
 }
 
 window.addEventListener("wheel", (e) => {
@@ -6413,13 +6415,19 @@ function guideInput(btn) {
     case "Up": animateScroll(body, "y", scrollTarget(body, "y") - 160); break;
     case "Down": animateScroll(body, "y", scrollTarget(body, "y") + 160); break;
     case "B": case "A": guideOpen = false; hideOverlay("overlay-guide"); break;
+    // The release notes' Discord button (the user's ask, Oct 13 2026: to bring people to the
+    // server). The host parks the launcher and opens the invite; the notes are still here after.
+    case "Y": if (!$("guideDiscord").hidden) send({ cmd: "openDiscord" }); break;
   }
 }
+
+$("guideDiscordBtn").addEventListener("click", () => { if (guideOpen) guideInput("Y"); });
 
 /* The guide's card carries two things: the couch setup guide, and a version's release notes
    after an update (showWhatsNew). Whichever opens it fills it, title and all. */
 function openGuide() {
   $("guideTitle").textContent = "COUCH SETUP GUIDE";
+  $("guideDiscord").hidden = true;
   renderGuide();
   $("guideBody").scrollTop = 0;
   guideOpen = true;
@@ -6446,6 +6454,7 @@ function showWhatsNew() {
   const { version, notes } = pendingWhatsNew;
   pendingWhatsNew = null;
   $("guideTitle").textContent = `WHAT'S NEW IN LOUNGEPAD ${version}`;
+  $("guideDiscord").hidden = false;
   $("guideBody").innerHTML = notesHtml(notes);
   $("guideBody").scrollTop = 0;
   guideOpen = true;
@@ -6729,6 +6738,121 @@ function formInput(btn) {
   }
 }
 
+/* ============================== the panel ==============================
+   A card of real buttons, for what is more than a list of rows: a wheel's options and the
+   preview of an import (actions.js, wheeledit.js). Only [data-pact] elements are buttons -- they
+   take the highlight, a click and A -- and everything else on the card is text and pictures and
+   looks it. The D-pad moves between the buttons by where they sit (navMove, the panel being the
+   active scope); B is the spec's `back`, else it closes. `render()` returns the card's HTML and is
+   asked again after every press; the highlight is kept by the pressed button's key. `key(btn)` may
+   answer a button first (LB/RB turning something), returning true. `foot()` is the legend.
+   Opened only over Settings, and closed before anything that is not an input or a confirm opens:
+   those come after it in the document, so they paint over it. */
+function openPanel(spec) {
+  panelState = { ...spec, focus: null };
+  const card = $("panelCard");
+  card.__html = null;
+  showOverlay("overlay-panel");      // active before rendered, or the first button is never lit
+  renderPanel();
+  const scroll = card.querySelector(".panel-scroll");
+  if (scroll) scroll.scrollTop = 0;
+}
+
+function closePanel() {
+  if (!panelState) return;
+  const p = panelState;
+  panelState = null;
+  hideOverlay("overlay-panel");
+  if (p.onClose) p.onClose();
+  repaintFocus();
+}
+
+function renderPanel() {
+  if (!panelState) return;
+  const card = $("panelCard");
+  card.className = "panel-card" + (panelState.cls ? " " + panelState.cls : "");
+  const html = panelState.render();
+  if (card.__html !== html) {
+    const scroll = card.querySelector(".panel-scroll"), top = scroll ? scroll.scrollTop : 0;
+    card.innerHTML = html;
+    card.__html = html;
+    const again = card.querySelector(".panel-scroll");
+    if (again) again.scrollTop = top;
+  }
+  const keys = [...card.querySelectorAll("[data-pact]")].map(e => e.dataset.pact);
+  // `start` may be worked out each time: where the highlight goes when its button has gone.
+  const start = typeof panelState.start === "function" ? panelState.start() : panelState.start;
+  if (!keys.includes(panelState.focus)) panelState.focus = keys.includes(start) ? start : keys[0] || null;
+  const scope = $("overlay-panel");
+  setScopeKey(scope, panelState.focus ? "panel:" + panelState.focus : null);
+  const el = focusEl(scope);
+  const show = focusVisible();
+  card.querySelectorAll("[data-pact]").forEach(x => x.classList.toggle("focused", show && x === el));
+  if (el && show) revealFocus(el);
+  // The highlighted button's own words, where the card has a line for them.
+  const hint = card.querySelector(".panel-hint");
+  if (hint) {
+    const text = el && show ? el.dataset.hint || "" : "";
+    if (hint.__text !== text) { hint.innerHTML = text ? hintHtml(text) : "&nbsp;"; hint.__text = text; }
+  }
+  const legend = card.querySelector(".panel-legend");
+  if (legend) {
+    const cur = el && show ? el : null;
+    const html = foot(...(panelState.foot ? panelState.foot(cur ? cur.dataset.pact : null) : [["A", "Select"], ["B", "Close"]]));
+    if (legend.__html !== html) { legend.innerHTML = html; legend.__html = html; }
+  }
+}
+
+function panelPress(key) {
+  if (!panelState || !key) return;
+  panelState.focus = key;
+  panelState.act(key);
+  if (panelState) renderPanel();
+}
+
+function panelInput(btn) {
+  if (panelState.key && panelState.key(btn)) { if (panelState) renderPanel(); return; }
+  switch (btn) {
+    case "Up": case "Down": case "Left": case "Right": {
+      if (navMove(btn, el => !!el.dataset.pact)) {
+        const el = focusEl($("overlay-panel"));
+        if (el) panelState.focus = el.dataset.pact;
+      }
+      renderPanel();
+      break;
+    }
+    case "A":
+      if (!focusVisible()) break;
+      panelPress(panelState.focus);
+      break;
+    case "B":
+      if (panelState.back) panelState.back(); else closePanel();
+      break;
+  }
+}
+
+// The pointer: resting on a button makes it the highlight (so A presses it), a click presses it.
+$("panelCard").addEventListener("mouseover", (e) => {
+  if (!panelState || !hoverEnabled()) return;
+  const b = e.target instanceof Element ? e.target.closest("[data-pact]") : null;
+  if (!b || b.dataset.pact === panelState.focus) return;
+  panelState.focus = b.dataset.pact;
+  renderPanel();
+});
+$("panelCard").addEventListener("click", (e) => {
+  if (!panelState) return;
+  const b = e.target instanceof Element ? e.target.closest("[data-pact]") : null;
+  if (b) panelPress(b.dataset.pact);
+});
+
+/* A button on a panel: `key` is what the spec's act() hears. `hint` is the line the card shows
+   while it is highlighted. Markup in `inner` is the caller's; text in it must be escaped. */
+function panelBtn(key, inner, opts = {}) {
+  const cls = ["pbtn", opts.cls || "", opts.primary ? "primary" : "", opts.danger ? "danger" : "", opts.on ? "on" : ""].filter(Boolean).join(" ");
+  return `<div class="${cls}" data-focusable data-pact="${esc(key)}" data-focus-key="panel:${esc(key)}"` +
+    `${opts.hint ? ` data-hint="${esc(opts.hint)}"` : ""} role="button">${inner}</div>`;
+}
+
 /* ---- dates and times on a pad ----
    ◂ ▸ nudge a value, and A on the row types one exactly (the on-screen keyboard comes up with the
    field). These read what was typed. */
@@ -6794,6 +6918,7 @@ function handleInput(btn, src) {
   if (manageOpen) { manageInput(btn); return; }
   if (choiceState) { choiceInput(btn); return; }
   if (modsState) { modsInput(btn); return; }
+  if (panelState) { panelInput(btn); return; }
   // The session's charts sit over a game's Stats sheet or a day's timeline; the achievements
   // sheet can sit over either of those. A day's timeline is only ever opened from the screen.
   // The form sheet is opened from those sheets (and from Settings), so it comes before them.
@@ -7116,6 +7241,19 @@ function handleHostMessage(m) {
       break;
     case "actionAppAdded":
       onActionAppAdded(m);
+      break;
+    // Bringing actions in (actions.js): what an import would do, then what it did.
+    case "actionsImportPreview":
+      onImportPreview(m);
+      break;
+    case "actionsImported":
+      onImported(m);
+      break;
+    case "actionsImportAddApp":
+      onImportAddApp(m);
+      break;
+    case "actionsCatalogue":
+      onActionsCatalogue(m);
       break;
     // The Power Wheel's shortcuts (shortcuts.js): the whole list after any change, with the icons
     // the host has found; the Start menu's apps for the picker and their icons; a file dialog's
@@ -7488,15 +7626,187 @@ const mockActions = (() => {
   };
   const pristine = packs();
   const apps = packs();
-  const payload = () => JSON.parse(JSON.stringify({ apps, maxItems: 8, maxTabs: 12 }));
+  const payload = () => JSON.parse(JSON.stringify({ apps: apps.map(a => ({ ...a,
+    communityLayouts: a.id === "everywhere" ? 0 : COMMUNITY.filter(l => l.exes.some(e => a.exes.includes(e))).length })), maxItems: 8, maxTabs: 12 }));
   const push = () => handleHostMessage({ type: "actions", actions: payload() });
   const find = (id) => apps.find(a => a.id === id);
   const locate = (app, id) => { for (const t of app.tabs) { const i = t.items.findIndex(x => x.id === id); if (i >= 0) return { t, i }; } return null; };
   const packDef = (app, id) => { const p = pristine.find(a => a.id === app.id); return p && p.tabs.flatMap(t => t.items).concat(p.spare).find(x => x.id === id); };
-  const touch = (app) => { if (!app.custom) app.modified = true; };
+  // Any edit of an app ends the chance to undo its last import, as on the host.
+  const touch = (app) => { if (!app.custom) app.modified = true; app.canUndoImport = false; };
+
+  // Bringing actions in: the host's planner (ActionService.Plan), cut down to its rules. One
+  // preview held at a time; an import keeps the app as it was for one undo.
+  let held = null;
+  const undo = {};
+  const ownOf = (app) => { const p = pristine.find(x => x.id === app.id && !x.custom); return p ? p.tabs.flatMap(t => t.items).concat(p.spare) : []; };
+  const DESTRUCTIVE = /^(Alt\+F4|Ctrl\+F4|Ctrl\+(Shift\+)?[WQ]|Shift\+Delete)$/;
+  const isPlaced = (i) => i.status === "new" || i.status === "pack";
+  const plan = (target, layout, replace, buttons) => {
+    const wheel = target.tabs.flatMap(t => t.items);
+    replace = replace || !wheel.length;
+    const onWheel = replace ? [] : wheel;
+    const have = new Set(onWheel.map(a => a.keys)), seen = new Set(), own = ownOf(target);
+    let room = 12 - (replace ? 0 : target.tabs.length);
+    const tabs = layout.tabs.map(lt => {
+      const items = lt.items.map(la => {
+        const p = own.find(x => x.keys === la.keys && !onWheel.some(w => w.id === x.id)) || null;
+        const status = seen.has(la.keys) ? "twice" : have.has(la.keys) ? "have" : p ? "pack" : "new";
+        seen.add(la.keys);
+        const mine = status === "pack" ? p : null;
+        return { name: mine ? mine.name : la.name, keys: la.keys, desc: mine ? mine.desc : la.desc, status, packId: mine && mine.id,
+          layoutButton: la.button || null, packButton: mine ? mine.button : null, button: null, asked: null, dropped: null,
+          danger: mine ? !!mine.danger : DESTRUCTIVE.test(la.keys), win: /(^|\+)Win\+/.test(la.keys) };
+      });
+      const fits = items.some(isPlaced) && room > 0;
+      if (fits) room--; else items.forEach(i => { if (isPlaced(i)) i.status = "noroom"; });
+      return { name: lt.name, fits, items };
+    });
+    const taken = new Map(onWheel.filter(a => a.button).map(a => [a.button, a.name]));
+    const ev = find("everywhere").tabs.flatMap(t => t.items).filter(a => a.button);
+    tabs.filter(t => t.fits).forEach(t => t.items.filter(isPlaced).forEach(i => {
+      i.asked = buttons ? i.layoutButton : i.packButton;
+      if (!i.asked) return;
+      const e = ev.find(a => a.button === i.asked);
+      i.dropped = ["A", "B"].includes(i.asked) ? `${i.asked} on its own is a click` : i.asked === "Guide" ? "Windows keeps Guide for itself"
+        : i.asked === "View" ? "It opens the keyboard" : taken.has(i.asked) ? `“${taken.get(i.asked)}” has it already`
+        : e ? `Everywhere's “${e.name}” has it` : null;
+      if (!i.dropped) { i.button = i.asked; taken.set(i.asked, i.name); }
+    }));
+    return { replace, tabs };
+  };
+
+  // What the preview's Open dialog "picks": a layout somebody made for Thorium, with a Win chord,
+  // buttons, and one action the host's cleaner would have left out.
+  const FILE = {
+    name: "Thorium from the sofa.actions.json", title: "Thorium from the sofa", author: "couchpotato",
+    summary: "Browsing with one hand: tabs on the shoulders, zoom on the triggers.",
+    app: { name: "Thorium", exes: ["thorium"] }, notes: ["One action has no shortcut Loungepad can send, and is left out"],
+    tabs: [{ name: "Sofa", items: [
+      { name: "New tab", keys: "Ctrl+T", desc: "A fresh tab.", button: "Y" }, { name: "Next tab", keys: "Ctrl+Tab", button: "RB" },
+      { name: "Previous tab", keys: "Ctrl+Shift+Tab", button: "LB" }, { name: "Zoom in", keys: "Ctrl+=", button: "RT" },
+      { name: "Zoom out", keys: "Ctrl+-", button: "LT" }, { name: "Back", keys: "Alt+Left", button: "X" },
+      { name: "Close tab", keys: "Ctrl+W" }, { name: "Snap left", keys: "Win+Left" }] }],
+  };
+  let fileHeld = null;
+  const preview = (target, layout, extra) => {
+    held = { token: "t" + Date.now().toString(16), target: target.id, layout, from: extra.from, kind: extra.kind };
+    const v = (r, b) => plan(target, layout, r, b);
+    const forThis = (layout.exes || []).some(e => target.exes.includes(e));
+    const m = { type: "actionsImportPreview", token: held.token, kind: extra.kind, target: { id: target.id, name: target.name }, label: extra.label,
+      madeFor: forThis ? null : extra.madeFor, summary: extra.summary || null, author: extra.author || null, notes: extra.notes || [],
+      key: extra.key || null, liked: !!extra.liked, likes: extra.likes ?? null, downloads: extra.downloads ?? null,
+      empty: !target.tabs.some(t => t.items.length), hasButtons: layout.tabs.some(t => t.items.some(a => a.button)),
+      plans: { add: v(false, false), addButtons: v(false, true), replace: v(true, false), replaceButtons: v(true, true) } };
+    setTimeout(() => handleHostMessage(m), 120);
+  };
+  const filePreview = (target) => preview(target, { exes: FILE.app.exes, tabs: FILE.tabs }, { kind: "file", from: FILE.name, label: FILE.title,
+    madeFor: FILE.app.name, summary: FILE.summary, author: FILE.author, notes: FILE.notes });
+
+  // The community's layouts, as the host's list of them (loungepad-addons' actions/): one for
+  // Thorium (the file above), two for Firefox, one that needs a newer launcher.
+  const COMMUNITY = [
+    { id: "thorium-sofa", name: FILE.title, author: FILE.author, summary: FILE.summary, exes: ["thorium", "chromium"], layout: { exes: FILE.app.exes, tabs: FILE.tabs }, likes: 12, downloads: 87 },
+    { id: "firefox-one-hand", name: "Firefox with one hand", author: "lefty", summary: "Everything on the shoulders and triggers, nothing on the face buttons.", exes: ["firefox"], likes: 4, downloads: 19,
+      layout: { exes: ["firefox"], tabs: [{ name: "One hand", items: [
+        { name: "New tab", keys: "Ctrl+T", button: "RB" }, { name: "Close tab", keys: "Ctrl+W", button: "LB + RB" }, { name: "Next tab", keys: "Ctrl+Tab", button: "RT" },
+        { name: "Previous tab", keys: "Ctrl+Shift+Tab", button: "LT" }, { name: "Reader view", keys: "F9", desc: "Shows the page as plain text.", button: "LS" },
+        { name: "Picture in picture", keys: "Ctrl+Shift+]", desc: "Pops the video out into a small window." }] }] } },
+    { id: "firefox-tomorrow", name: "Firefox, the next version", author: "early", summary: "Uses what a later Loungepad reads.", exes: ["firefox"], needs: "1.11.0", likes: 0, downloads: 0, layout: { exes: ["firefox"], tabs: [] } },
+  ];
+  const liked = new Set();
+
   const handle = (msg) => {
     const app = find(msg.appId);
     switch (msg.cmd) {
+      case "actionsCatalogue": {
+        const layouts = app ? COMMUNITY.filter(l => l.exes.some(e => app.exes.includes(e))).map(l => ({
+          id: l.id, key: "actions:" + l.id, name: l.name, summary: l.summary, author: l.author, version: "1.0.0",
+          tabs: l.layout.tabs.length, actions: l.layout.tabs.reduce((n, t) => n + t.items.length, 0),
+          buttons: l.layout.tabs.reduce((n, t) => n + t.items.filter(a => a.button).length, 0),
+          likes: l.likes, downloads: l.downloads, liked: liked.has(l.id), needs: l.needs || null,
+        })) : [];
+        setTimeout(() => handleHostMessage({ type: "actionsCatalogue", appId: msg.appId, layouts, error: null }), 300);
+        return;
+      }
+      case "addonLike": {
+        const l = COMMUNITY.find(x => "actions:" + x.id === msg.key);
+        if (l && liked.has(l.id) !== !!msg.on) { if (msg.on) liked.add(l.id); else liked.delete(l.id); l.likes = Math.max(0, l.likes + (msg.on ? 1 : -1)); }
+        return;
+      }
+      case "actionsImportPreview": {
+        if (msg.source && msg.source.kind === "catalogue") {
+          const target = find(msg.target), l = COMMUNITY.find(x => x.id === msg.source.id);
+          if (!target || !l) { toast("That layout is not in the repository's list"); return; }
+          preview(target, l.layout, { kind: "catalogue", from: l.name, label: l.name, madeFor: l.exes[0], summary: l.summary, author: l.author,
+            key: "actions:" + l.id, liked: liked.has(l.id), likes: l.likes, downloads: l.downloads });
+          return;
+        }
+        const target = find(msg.target), src = find(msg.source && msg.source.appId);
+        if (!target || !src || target === src) { toast("Those actions cannot be copied there"); return; }
+        const tabId = msg.source.tabId || null;
+        const srcTabs = src.tabs.filter(t => t.items.length && (!tabId || t.id === tabId));
+        const layout = { exes: src.exes, tabs: srcTabs.map(t => ({ name: t.name, items: t.items.filter(a => a.keys).map(a => ({ name: a.name, keys: a.keys, desc: a.desc, button: a.button })) })) };
+        preview(target, layout, { kind: "app", from: src.name, madeFor: src.name, label: tabId && srcTabs[0] ? `${src.name} · ${srcTabs[0].name}` : src.name });
+        return;
+      }
+      case "actionsExport":
+        toast(`(preview) would save ${app ? app.name : "?"}'s actions as ${app ? app.name : "?"}.actions.json`);
+        return;
+      case "actionsImportFile": {
+        const target = msg.target ? find(msg.target) : null;
+        if (target) { filePreview(target); return; }
+        const match = apps.find(a => a.exes.some(e => FILE.app.exes.includes(e)));
+        if (match && match.installed) { filePreview(match); return; }
+        fileHeld = "f" + Date.now().toString(16);
+        setTimeout(() => handleHostMessage({ type: "actionsImportAddApp", token: fileHeld, label: FILE.title, name: FILE.app.name, exe: FILE.app.exes[0] }), 120);
+        return;
+      }
+      case "actionsImportAddApp": {
+        if (msg.token !== fileHeld) { toast("Choose the file again"); return; }
+        fileHeld = null;
+        const exe = FILE.app.exes[0];
+        let a = apps.find(x => x.exes.includes(exe));
+        if (!a) { a = { id: exe, name: FILE.app.name, exes: [exe], custom: true, pinned: false, installed: true, modified: false, icon: null, tabs: [T("main", "Actions")], spare: [] }; apps.push(a); }
+        a.installed = true;
+        push();
+        handleHostMessage({ type: "actionAppAdded", id: a.id, existed: false });
+        filePreview(a);
+        return;
+      }
+      case "actionsImport": {
+        const target = held && held.token === msg.token ? find(held.target) : null;
+        const p = target && plan(target, held.layout, msg.mode === "replace", !!msg.buttons);
+        const fresh = p ? p.tabs.filter(t => t.fits).map((t, k) => ({
+          id: "imp" + Date.now().toString(16) + k,
+          name: !p.replace && target.tabs.some(x => x.name.toLowerCase() === t.name.toLowerCase()) ? t.name + " 2" : t.name,
+          items: t.items.filter(isPlaced).map(i => ({ ...(i.packId ? ownOf(target).find(x => x.id === i.packId) : {}),
+            id: i.packId || "c" + Math.random().toString(16).slice(2, 10), name: i.name, keys: i.keys, desc: i.desc, button: i.button,
+            custom: !i.packId, danger: i.danger, edited: false })),
+        })) : [];
+        if (!fresh.length) { push(); toast("Nothing was brought in: the preview had run out, or nothing in it was new"); return; }
+        undo[target.id] = JSON.parse(JSON.stringify({ tabs: target.tabs, spare: target.spare, modified: target.modified,
+          importedFrom: target.importedFrom || null, importedKind: target.importedKind || null }));
+        const ids = new Set(fresh.flatMap(t => t.items.map(i => i.id)));
+        if (p.replace) { target.tabs = fresh; target.spare = ownOf(target).filter(x => !ids.has(x.id)).map(x => ({ ...x })); }
+        else { target.tabs.push(...fresh); target.spare = target.spare.filter(x => !ids.has(x.id)); }
+        touch(target);
+        target.canUndoImport = true;
+        target.importedFrom = held.from;
+        target.importedKind = held.kind;
+        const all = p.tabs.flatMap(t => t.items), placed = all.filter(i => isPlaced(i) && p.tabs.find(t => t.items.includes(i)).fits);
+        held = null;
+        push();
+        handleHostMessage({ type: "actionsImported", appId: target.id, tabId: fresh[0].id,
+          added: placed.filter(i => i.status === "new").length, restored: placed.filter(i => i.status === "pack").length, skipped: all.length - placed.length });
+        return;
+      }
+      case "actionsUndoImport": {
+        const was = undo[msg.appId];
+        if (app && was && app.canUndoImport) { Object.assign(app, was); app.canUndoImport = false; delete undo[msg.appId]; }
+        else toast("There is nothing to undo: the wheel has been changed since");
+        break;
+      }
       case "actionFire": {
         const at = app && locate(app, msg.actionId);
         toast(`(preview) would send ${at ? at.t.items[at.i].keys : "?"} to ${app ? app.name : "?"}`);
@@ -8431,7 +8741,9 @@ function mockHandle(msg) {
   } else if (msg.cmd && msg.cmd.startsWith("shortcut")) {
     mockShortcuts.handle(msg);
   } else if (["actionFire", "actionUpdate", "actionRestore", "actionRemove", "actionMove", "actionTabAdd", "actionTabRename",
-      "actionTabMove", "actionTabRemove", "actionAppReset", "actionAppRemove", "actionAppRename", "actionAppAdd", "actionAppBrowse"].includes(msg.cmd)) {
+      "actionTabMove", "actionTabRemove", "actionAppReset", "actionAppRemove", "actionAppRename", "actionAppAdd", "actionAppBrowse",
+      "actionsImportPreview", "actionsImport", "actionsUndoImport", "actionsExport", "actionsImportFile", "actionsImportAddApp",
+      "actionsCatalogue"].includes(msg.cmd) || (msg.cmd === "addonLike" && String(msg.key).startsWith("actions:"))) {
     mockActions.handle(msg);
   } else if (msg.cmd === "actionCapture") {
     // What the pad "presses", in turn: a plain button, then the two the host refuses, a chord, a

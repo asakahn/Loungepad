@@ -41,7 +41,7 @@ globalThis.fetch = async (url) => {
   if (String(url).startsWith("https://raw.githubusercontent.com/sukumar-v/loungepad-addons/")) {
     indexFetches++;
     if (indexStatus !== 200) return new Response("nope", { status: indexStatus });
-    return new Response(JSON.stringify({ addons: [{ kind: "extension", id: "howlongtobeat" }, { kind: "theme", id: "arcade" }] }), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ addons: [{ kind: "extension", id: "howlongtobeat" }, { kind: "theme", id: "arcade" }, { kind: "actions", id: "thorium-sofa" }] }), { headers: { "Content-Type": "application/json" } });
   }
   throw new Error(`unexpected fetch ${url}`);
 };
@@ -101,6 +101,11 @@ check("likes never go below zero", r.body.counted && r.body.likes === 0);
 const s = await stats();
 check("stats carry every counted add-on", s["extension:howlongtobeat"]?.downloads === 2 && s["extension:howlongtobeat"]?.likes === 0 && s["theme:arcade"]?.likes === 0);
 
+r = await like("actions:thorium-sofa");
+check("an action layout the index lists can be liked", r.status === 200 && r.body.counted && r.body.likes === 1);
+r = await dl("actions:thorium-sofa");
+check("and its download counted", r.status === 200 && r.body.counted && r.body.downloads === 1);
+check("an action layout the index does not list is 404", (await like("actions:nope")).status === 404);
 check("a key the index does not list is 404", (await like("extension:not-there")).status === 404);
 check("a malformed key is 400", (await like("../etc")).status === 400 && (await like("Extension:X")).status === 400);
 check("a body that is not JSON is 400", (await worker.fetch(new Request("https://api.example/v1/addons/like", { method: "POST", headers: { "X-Loungepad-Client": "1", "CF-Connecting-IP": ip }, body: "nope" }), env, {})).status === 400);

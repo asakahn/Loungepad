@@ -16,8 +16,9 @@
  *   2. Settings → Actions. A grid of the apps on this PC we have actions for, plus Everywhere and
  *      the user's own; A on a tile opens that app's wheel in the wheel editor (wheeledit.js), the
  *      same one Settings → Shortcuts is: A edits an action (the form sheet, over the wheel), the +
- *      spoke adds one, Y moves one round the ring or to another tab, X has the tab's options and
- *      the app's own (restore, rename, remove). B goes back to the grid.
+ *      spoke adds one, X moves one round the ring or to another tab, Y is the options card: the
+ *      tab's, the ways to bring actions in, and the app's own (save, restore, rename, remove).
+ *      Bringing actions in ends on the import's own screen (acImportHtml). B goes back to the grid.
  *
  *   3. The two pickers an action needs: "press a button" (the host records the next press or
  *      chord and swallows it) and a keyboard laid out to point at, for the shortcut.
@@ -493,7 +494,8 @@ const acModel = {
         : "The actions on it are deleted.",
     };
   },
-  tabOptionsExtra: () => acAppOptions(),
+  optionsHead: () => acOptionsHead(),
+  optionSections: () => acOptionSections(),
   send: {
     move: (id, tabId, index) => send({ cmd: "actionMove", appId: actionsUi.appId, actionId: id, tabId, index }),
     tabAdd: (id, name, index) => send({ cmd: "actionTabAdd", appId: actionsUi.appId, id, name, index }),
@@ -524,7 +526,9 @@ function acCardHtml(tab, sel, onAdd) {
       `<div class="sc-card-name">Add an action</div>` +
       `<div class="sc-card-what">${app.id === EVERYWHERE_ID ? "A keyboard shortcut for whatever app is in front" : `A keyboard shortcut ${esc(app.name)} understands`}, with a name and, if you like, a button.</div>` +
       (spare ? `<div class="sc-card-note">${spare === 1 ? `One of ${esc(app.name)}'s own is off the wheel` : `${spare} of ${esc(app.name)}'s own are off the wheel`}, and offered first</div>` : "") +
-      `<div class="sc-card-note">${left === 1 ? "Room for one more on this tab" : `Room for ${left} more on this tab`}</div>`;
+      `<div class="sc-card-note">${left === 1 ? "Room for one more on this tab" : `Room for ${left} more on this tab`}</div>` +
+      (app.id !== EVERYWHERE_ID && !appActions(app).length
+        ? `<div class="sc-card-note">${hintHtml("Or start from a community layout, another app's wheel, or a file: [[Y]] Options")}</div>` : "");
   }
   const notes = [];
   const warn = sel.button ? bindingWarn(app, sel) : null;
@@ -541,33 +545,393 @@ function acCardHtml(tab, sel, onAdd) {
     notes.join("");
 }
 
-/* The app's own options, under the tab's: restore the pack, rename or remove an app of one's own. */
-function acAppOptions() {
+/* The options card (Y; wheeledit.js draws it): its heading, and the app's parts after "This tab".
+   Bringing actions in is a part of its own, three tiles for the three ways in, so it is never
+   mistaken for something done to the tab; then the app itself. On an empty wheel the ways in come
+   first: they are the likeliest thing wanted there. */
+function acOptionsHead() {
+  const app = acApp(), tab = acTabs()[acUi.tab];
+  if (!app) return { title: "Options" };
+  const iconHtml = app.id === EVERYWHERE_ID ? `<span class="panel-app-icon">${iconSvg("globe")}</span>`
+    : app.icon ? `<span class="panel-app-icon" style="background-image:url('${scCssUrl(app.icon)}')"></span>`
+    : `<span class="panel-app-icon">${esc((app.name || "?").trim().charAt(0).toUpperCase())}</span>`;
+  return { kicker: "OPTIONS", title: app.name, iconHtml,
+    sub: tab ? `${tab.name} tab · ${(tab.items || []).length} of ${actionsMaxItems()} actions` : "" };
+}
+
+function acOptionSections() {
   const app = acApp();
   if (!app) return [];
-  const items = [];
-  if (!app.custom && app.modified) items.push({
-    label: `Restore ${app.name}'s defaults`, icon: "refresh", sub: "Every tab, change and action of your own here goes",
+  const out = [];
+  if (app.id !== EVERYWHERE_ID) {
+    const n = app.communityLayouts || 0;
+    out.push({
+      title: `Bring actions into ${app.name}`, tiles: true, first: !appActions(app).length,
+      note: "Each one shows you what it would bring in first. Nothing changes until you say so.",
+      items: [
+        { key: "in:community", icon: "globe", label: "Community layouts",
+          sub: n ? `${n === 1 ? "One wheel" : n + " wheels"} other people made for ${app.name}` : `Wheels other people made and shared`,
+          hint: `Wheels other people made for ${app.name}: pick one to see what it would bring in`, action: () => acOpenCommunity(app) },
+        { key: "in:app", icon: "apps", label: "Another app's wheel", sub: "Copy all of its tabs, or one of them",
+          hint: `Copy actions from another app in your list, like one browser's into another`, action: () => acStartCopy() },
+        { key: "in:file", icon: "download", label: "A file", sub: "A wheel saved with Save to a file",
+          hint: "Open a file of actions, saved on this PC or sent by someone else", action: () => acImportFromFile(app) },
+      ],
+    });
+  }
+  const own = [];
+  if (app.id !== EVERYWHERE_ID && appActions(app).some(a => a.keys)) own.push({
+    key: "app:save", icon: "file", label: "Save to a file",
+    hint: `Save ${app.name}'s wheel as a file: to keep, to move to another PC, or to share`,
+    action: () => send({ cmd: "actionsExport", appId: app.id }),
+  });
+  if (app.canUndoImport) own.push({
+    key: "app:undo", icon: "restart", label: "Undo the import",
+    hint: `${app.importedFrom ? `${app.importedKind === "app" ? "Copied" : "Brought in"} from ${app.importedFrom}. ` : ""}Puts the wheel back to how it was just before, until anything here is changed`,
+    action: () => askConfirm({
+      title: "Undo the import?", body: `${app.name}'s wheel goes back to how it was just before it.`,
+      yesLabel: "Undo", icon: "restart",
+      onYes: () => { send({ cmd: "actionsUndoImport", appId: app.id }); acUi.tab = 0; settingsIdx = 0; },
+    }),
+  });
+  if (!app.custom && app.modified) own.push({
+    key: "app:restore", icon: "refresh", label: "Restore defaults", danger: true,
+    hint: `Back to ${app.name}'s wheel as Loungepad ships it: every tab, change and action of your own here goes`,
     action: () => askConfirm({
       title: `Restore ${app.name}'s defaults?`, body: "Its tabs and actions go back to how Loungepad ships them. Actions you made yourself are deleted.",
       yesLabel: "Restore", icon: "refresh", danger: true,
       onYes: () => { send({ cmd: "actionAppReset", appId: app.id }); acUi.tab = 0; settingsIdx = 0; },
     }),
   });
-  if (app.custom) items.push({
-    label: "Rename this app", icon: "edit", sub: app.name,
+  if (app.custom) own.push({
+    key: "app:rename", icon: "edit", label: "Rename app", hint: `Call ${app.name} something else in this list`,
     action: () => openInput("APP NAME", app.name, v => { if (v) { app.name = v; send({ cmd: "actionAppRename", appId: app.id, name: v }); renderSettings(); } }),
   });
-  if (app.custom || app.pinned) items.push({
-    label: "Remove this app", icon: "trash", danger: true,
-    sub: app.custom ? "Its actions go with it" : "The program stays on this PC; it comes back if you add it again",
+  if (app.custom || app.pinned) own.push({
+    key: "app:remove", icon: "trash", label: "Remove app", danger: true,
+    hint: app.custom ? `Take ${app.name} out of the list, with every action set up for it` : "Take it out of the list. The program stays on this PC, and comes back if you add it again",
     action: () => askConfirm({
       title: `Remove ${app.name}?`, body: app.custom ? "Every action you set up for it is deleted." : "Its actions and buttons go back to the defaults, and it leaves the grid.",
       yesLabel: "Remove", icon: "trash", danger: true,
       onYes: () => { send({ cmd: "actionAppRemove", appId: app.id }); actionsBack(); },
     }),
   });
-  return items.length ? [{ cat: app.name.toUpperCase() }, ...items] : [];
+  if (own.length) out.push({ title: app.id === EVERYWHERE_ID ? "Everywhere" : app.name, items: own });
+  return out;
+}
+
+/* ---- bringing actions in: a copy from another app (docs/ACTION-SHARING.md) ----
+   The host builds the layout, cleans it and plans the import; the page shows the plan and answers
+   with the token and two choices, never with actions of its own. Everywhere is never a source or
+   a target: its actions are on every app's wheel already, and its buttons answer in every app. */
+
+function acCount(n, word) { return `${n === 1 ? "one" : n} ${word}${n === 1 ? "" : "s"}`; }
+
+/* The apps a wheel can be copied from: any in the grid with something to send, but not this one. */
+function acCopySources(app) {
+  return shownApps().filter(a => a.id !== EVERYWHERE_ID && a.id !== app.id && appActions(a).some(x => x.keys));
+}
+
+/* A file of actions, into this app whatever program it was made for (the preview says so). */
+function acImportFromFile(app) {
+  acImport = { waiting: app.id };
+  send({ cmd: "actionsImportFile", target: app.id });
+}
+
+/* ---- the community's layouts (loungepad-addons' actions/) ----
+   The repository's list is cached by the host; the count on the tile comes from that cache, and
+   the list is read again (if it is stale) when it is opened. A layout is previewed like a file:
+   downloaded and checked against the list's hash on the host, nothing of it written to disk. */
+
+let acCommunity = null;   // { waiting: appId } while the host reads the list
+
+function acOpenCommunity(app, refresh) {
+  acCommunity = { waiting: app.id };
+  send({ cmd: "actionsCatalogue", appId: app.id, refresh: !!refresh });
+  openChoice(`For ${app.name}`, [{ label: "Reading the list…", icon: "refresh", sub: "From the add-ons repository", action: () => acOpenCommunity(app) }]);
+}
+
+function onActionsCatalogue(m) {
+  if (!acCommunity || acCommunity.waiting !== m.appId) return;
+  acCommunity = null;
+  const app = actionApp(m.appId);
+  // Only over the placeholder: a list closed meanwhile stays closed.
+  if (!app || !choiceState || choiceState.title !== `For ${app.name}`) return;
+  const layouts = m.layouts || [];
+  const items = layouts.map(l => {
+    const size = `${acCount(l.actions, "action")} on ${acCount(l.tabs, "tab")}${l.buttons ? `, ${acCount(l.buttons, "button")}` : ""}`;
+    const nums = [l.likes != null ? `${l.likes} ♥` : null, l.downloads != null ? `${l.downloads} brought in` : null, l.liked ? "you like it" : null].filter(Boolean);
+    return {
+      label: l.name, icon: l.needs ? "info" : "globe",
+      sub: l.needs ? `Needs Loungepad ${l.needs}` : [l.author ? `By ${l.author}` : null, size, ...nums].filter(Boolean).join(" · "),
+      action: () => {
+        if (l.needs) { toast(`${l.name} needs Loungepad ${l.needs}. Settings › General has the update`); return; }
+        acAskPreview(app, { kind: "catalogue", id: l.id });
+      },
+    };
+  });
+  if (!layouts.length) items.push(m.error
+    ? { label: "Could not read the list", icon: "info", sub: m.error, action: () => acOpenCommunity(app, true) }
+    : { label: `None for ${app.name} yet`, icon: "info", sub: "Yours could be the first: Save to a file, then see the add-ons repository", action: () => toast("github.com/sukumar-v/loungepad-addons says how to send one in") });
+  items.push({ label: "Read the list again", icon: "refresh", sub: "It is kept for a few hours", action: () => acOpenCommunity(app, true) });
+  openChoice(`For ${app.name}`, items);
+}
+
+/* "A file of actions…" from the grid: the host reads the file and previews it into the program
+   it names, after asking here to add that program when the grid does not have it yet. */
+function acImportFileFromGrid() {
+  acImport = { waiting: "*" };
+  send({ cmd: "actionsImportFile", target: null });
+}
+
+function onImportAddApp(m) {
+  if (!acImport || acImport.waiting !== "*") return;
+  askConfirm({
+    title: `Add ${m.name}?`,
+    body: `“${m.label}” is for ${m.name} (${m.exe}.exe), which is not in your list yet. It is added, then you see what the file would bring in.`,
+    yesLabel: "Add", icon: "plus",
+    onYes: () => { acImport = { waiting: "*" }; send({ cmd: "actionsImportAddApp", token: m.token }); },
+  });
+}
+
+function acStartCopy() {
+  const app = acApp();
+  if (!app) return;
+  const from = acCopySources(app);
+  if (!from.length) { toast("No other app has actions to copy yet"); return; }
+  openChoice(`Copy into ${app.name}`, from.map(src => {
+    const tabs = (src.tabs || []).filter(t => (t.items || []).length).length;
+    return { label: src.name, icon: "apps", sub: `${acCount(appActions(src).length, "action")} on ${acCount(tabs, "tab")}`, action: () => acPickCopyTab(app, src) };
+  }));
+}
+
+/* The whole wheel, or one of its tabs; straight to the preview when there is only one. */
+function acPickCopyTab(app, src) {
+  const tabs = (src.tabs || []).filter(t => (t.items || []).length);
+  const go = (tabId) => acAskPreview(app, { kind: "app", appId: src.id, tabId: tabId || null });
+  if (tabs.length < 2) { go(null); return; }
+  openChoice(`From ${src.name}`, [
+    { label: "The whole wheel", icon: "apps", sub: `${acCount(appActions(src).length, "action")} on ${acCount(tabs.length, "tab")}`, action: () => go(null) },
+    { cat: "ONE TAB" },
+    ...tabs.map(t => ({ label: t.name, icon: "bolt", sub: acCount(t.items.length, "action"), action: () => go(t.id) })),
+  ], { onBack: () => acStartCopy() });
+}
+
+/* The preview on screen: the host's message plus the two choices. While the host plans, only the
+   app it was asked for, so an answer for another (or for a sheet since closed) is dropped. */
+let acImport = null;
+
+function acAskPreview(app, source) {
+  acImport = { waiting: app.id };
+  send({ cmd: "actionsImportPreview", target: app.id, source });
+}
+
+function onImportPreview(m) {
+  const id = m.target && m.target.id;
+  if (!acImport || (acImport.waiting !== id && acImport.waiting !== "*")) return;
+  if (view !== "settings" || settingsTab !== "actions") return;
+  // From the grid, the app the file is for: its wheel opens under the sheet.
+  if (actionsUi.level !== "app" || actionsUi.appId !== id) {
+    if (acImport.waiting !== "*" || !actionApp(id)) return;
+    enterActionsApp(id);
+  }
+  acImport = { ...m, replace: !!m.empty, buttons: false, tab: 0 };
+  openPanel({
+    kind: "import", cls: "import-card",
+    start: () => acImportCounts().placed ? "import" : "cancel",
+    render: () => acImportHtml(),
+    act: (key) => acImportAct(key),
+    key: (btn) => acImportKey(btn),
+    foot: (key) => acImportFoot(key),
+    onClose: () => { if (acImport && acImport.token === m.token) acImport = null; },
+  });
+}
+
+function acImportPlan() {
+  const im = acImport;
+  return im && im.plans ? im.plans[(im.replace ? "replace" : "add") + (im.buttons ? "Buttons" : "")] : null;
+}
+function acPlaced(i) { return i.status === "new" || i.status === "pack"; }
+
+function acImportCounts() {
+  const p = acImportPlan();
+  const all = p ? p.tabs.flatMap(t => t.items) : [];
+  return {
+    placed: all.filter(acPlaced).length,
+    have: all.filter(i => i.status === "have").length,
+    left: all.filter(i => i.status === "twice" || i.status === "noroom").length,
+    tabs: p ? p.tabs.filter(t => t.fits).length : 0,
+    dropped: all.filter(i => acPlaced(i) && i.dropped).length,
+  };
+}
+
+function acComboHint(combo) { return String(combo || "").split("+").map(b => `[[${b.trim()}]]`).join(" + "); }
+
+/*
+ * The import's screen, top to bottom (the user's layout, Oct 13 2026): who made it and its
+ * numbers, with Like; what its maker said; the wheel as it would come in, a tab at a time, with
+ * what happens to each tab in sentences beside it; the two choices; Cancel and the import itself.
+ * Only the buttons are buttons: the wheel is a picture (flat names, no boxes, no highlight), the
+ * sentences are text, and a tab chip is a button only when there is more than one tab to show.
+ */
+function acImportHtml() {
+  const im = acImport, p = acImportPlan();
+  if (!im || !p) return "";
+  const c = acImportCounts();
+  const tabs = p.tabs;
+  im.tab = Math.max(0, Math.min(im.tab || 0, tabs.length - 1));
+  const t = tabs[im.tab];
+  const app = im.target.name;
+  const total = tabs.reduce((n, x) => n + x.items.length, 0);
+  const replacing = p.replace && !im.empty;
+
+  // ---- who made it, and its numbers ----
+  const meta = [];
+  if (im.kind === "app") meta.push(`<span>A copy of another app's wheel</span>`);
+  if (im.kind === "file") meta.push(`<span>From a file</span>`);
+  if (im.author) meta.push(`<span>By <b>${esc(im.author)}</b></span>`);
+  if (im.likes != null) meta.push(`<span class="imp-stat">${iconSvg("heart")}${im.likes} ${im.likes === 1 ? "like" : "likes"}</span>`);
+  if (im.downloads != null) meta.push(`<span class="imp-stat">${iconSvg("download")}${im.downloads} brought in</span>`);
+  meta.push(`<span>${acCount(total, "action")} on ${acCount(tabs.length, "tab")}</span>`);
+  const like = im.key ? panelBtn("like", `${iconSvg("heart")}<span>${im.liked ? "Liked" : "Like"}</span>`, { cls: "pbtn-sm", on: im.liked }) : "";
+  const head = `<div class="panel-head imp-head"><div class="panel-head-text">` +
+    `<div class="panel-kicker mono">${esc(`BRING ACTIONS INTO ${app.toUpperCase()}`)}</div>` +
+    `<div class="panel-title">${esc(im.label)}</div>` +
+    `<div class="imp-meta">${meta.join(`<span class="imp-dot">·</span>`)}</div></div>${like}</div>`;
+
+  // ---- what its maker said, and what the host noticed ----
+  const notes = [...(im.notes || [])];
+  if (im.madeFor && c.placed) notes.unshift(`These are ${im.madeFor}'s shortcuts. Most programs share the common ones; check any that matter do the same in ${app}.`);
+  const about = im.summary || notes.length
+    ? `<div class="imp-about">${im.summary ? `<p class="imp-summary">${esc(im.summary)}</p>` : ""}${notes.map(n => `<p class="imp-note">${esc(n)}</p>`).join("")}</div>` : "";
+
+  // ---- the wheel, a tab at a time ----
+  const chips = tabs.length > 1
+    ? `<div class="imp-tabs">${slot("LB")}${tabs.map((x, i) => panelBtn("tab:" + i,
+        `<span>${esc(x.name)}</span><span class="imp-tab-n">${x.items.length}</span>`,
+        { cls: "imp-tab" + (x.fits ? "" : " nofit"), on: i === im.tab })).join("")}${slot("RB")}</div>`
+    : "";
+  const placedHere = t.items.filter(acPlaced).length;
+  const wheel = `<div class="imp-wheel">` +
+    t.items.map((it, i) => {
+      const pos = scSpokeXY(i, t.items.length, 140, 230, 175);
+      return `<div class="imp-spoke ${it.status}${it.danger && acPlaced(it) ? " danger" : ""}" style="left:${pos.x.toFixed(1)}px;top:${pos.y.toFixed(1)}px">${acImportSpokeHtml(it)}</div>`;
+    }).join("") +
+    `<div class="imp-hub"><div class="imp-hub-name mono">${esc(t.name.toUpperCase())}</div>` +
+    `<div class="imp-hub-count">${placedHere ? `${placedHere} coming in` : "Nothing new"}</div></div></div>`;
+  const body = `<div class="imp-body">${wheel}<div class="imp-tabcard">${acImportTabCard(t, im, p)}</div></div>`;
+
+  // ---- the two choices ----
+  const missed = p.replace ? 0 : tabs.flatMap(x => x.items).filter(i => i.status === "have" && i.layoutButton).length;
+  const ownHere = tabs.some(x => x.items.some(i => i.status === "pack"));
+  const how = `<div class="imp-opt"><div class="panel-label mono">HOW</div>` + (im.empty
+    ? `<div class="imp-opt-note">${esc(app)}'s wheel is empty, so these become its tabs.</div>`
+    : `<div class="pseg">${panelBtn("mode:add", "Add as new tabs", { on: !im.replace })}${panelBtn("mode:replace", "Replace my wheel", { on: im.replace, danger: true })}</div>` +
+      `<div class="imp-opt-note">${im.replace ? "These become the wheel, and what is on it now goes. Undo can bring it back." : "These go on new tabs after yours. Nothing of yours changes."}</div>`) + `</div>`;
+  const buttons = `<div class="imp-opt"><div class="panel-label mono">CONTROLLER BUTTONS</div>` + (im.hasButtons
+    ? panelBtn("buttons", `<span class="pswitch"></span><span>Bring its button mappings</span>`, { on: im.buttons }) +
+      `<div class="imp-opt-note">${esc(im.buttons
+        ? (c.dropped ? `${c.dropped === 1 ? "One is" : c.dropped + " are"} left off, because something here has that button already: the tabs say which. ` : "Each fires its action without the wheel. ")
+          + (missed ? `${missed === 1 ? "One is" : missed + " are"} for actions already on your wheel, which adding leaves alone: Replace takes ${missed === 1 ? "it" : "them"} too.` : "")
+        : `Off: what comes in has no buttons${ownHere ? `, and ${app}'s own actions keep theirs` : ""}.`)}</div>`
+    : `<div class="imp-opt-note">It has no button mappings.</div>`) + `</div>`;
+
+  // ---- go ----
+  const label = !c.placed ? null : replacing ? `Replace with ${acCount(c.placed, "action")}` : `Add ${acCount(c.placed, "action")}`;
+  const actions = `<div class="panel-actions">${panelBtn("cancel", "Cancel")}` +
+    (label ? panelBtn("import", `${iconSvg(replacing ? "refresh" : "download")}<span>${esc(label)}</span>`, { primary: true, danger: replacing })
+      : `<div class="pbtn-off">Nothing new to bring in</div>`) + `</div>`;
+
+  return head + `<div class="panel-scroll">${about}${chips}${body}<div class="imp-options">${how}${buttons}</div></div>` +
+    actions + `<div class="panel-legend ov-foot"></div>`;
+}
+
+/* One spoke of the picture: what it is (a tag), its name, its keys and the button it would have. */
+function acImportSpokeHtml(it) {
+  const tag = { new: "NEW", pack: "BUILT IN", have: "ON YOUR WHEEL", twice: "REPEATED", noroom: "NO ROOM" }[it.status] || "";
+  const btn = it.button ? `<span class="imp-btn">${comboHtml(it.button)}</span>`
+    : acPlaced(it) && it.dropped && it.asked ? `<span class="imp-btn dropped">${comboHtml(it.asked)}</span>` : "";
+  return `<span class="imp-tag mono">${tag}${acPlaced(it) && it.win ? " · WINDOWS" : ""}</span>` +
+    `<span class="imp-name">${esc(it.name)}</span><span class="imp-keys">${keysHtml(it.keys)}</span>${btn}`;
+}
+
+/* Beside the wheel: what happens to the tab on screen, in sentences. Plain text; names quoted. */
+function acImportTabCard(t, im, p) {
+  const app = im.target.name;
+  const names = (list) => {
+    const q = list.map(i => `“${i.name}”`);
+    return q.length > 4 ? `${q.slice(0, 3).join(", ")} and ${q.length - 3} more` : q.length > 1 ? `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}` : q[0];
+  };
+  const of = (s) => t.items.filter(i => i.status === s);
+  const is = (list, one, many) => list.length === 1 ? one : many;
+  const lines = [];
+  const placed = t.items.filter(acPlaced);
+  if (t.items.some(i => i.status === "noroom")) lines.push({ text: `There is no room for this tab: an app holds ${actionsMaxTabs()} tabs.`, warn: true });
+  const nw = of("new"), pk = of("pack"), hv = of("have"), tw = of("twice");
+  if (nw.length) lines.push({ text: `${names(nw)} ${is(nw, "is", "are")} new to ${app}.` });
+  if (pk.length) lines.push({ text: `${names(pk)} ${is(pk, "is", "are")} ${app}'s own${p.replace ? "" : ", put back on the wheel"}, under ${is(pk, "its", "their")} own name.` });
+  if (hv.length) lines.push({ text: `${names(hv)} ${is(hv, "is", "are")} on your wheel already, and ${is(hv, "stays as it is", "stay as they are")}.` });
+  if (tw.length) lines.push({ text: `${names(tw)} ${is(tw, "repeats a shortcut", "repeat shortcuts")} from earlier, so ${is(tw, "it is", "they are")} left out.` });
+  placed.filter(i => i.dropped && i.asked).forEach(i => lines.push({ text: `“${i.name}”: its button ${acComboHint(i.asked)} stays off. ${i.dropped}.` }));
+  placed.filter(i => i.danger).forEach(i => lines.push({ text: `“${i.name}” closes or quits something, so it is red on the wheel.`, warn: true }));
+  placed.filter(i => i.win).forEach(i => lines.push({ text: `“${i.name}” acts on Windows itself, not on ${app}.`, warn: true }));
+  return `<div class="imp-tabcard-title mono">${esc(t.name.toUpperCase())}</div>` +
+    `<div class="imp-tabcard-count">${placed.length ? `${acCount(placed.length, "action")} coming in` : "Nothing new on this tab"}</div>` +
+    `<ul class="imp-lines">${lines.map(l => `<li${l.warn ? ` class="warn"` : ""}>${hintHtml(l.text)}</li>`).join("")}</ul>`;
+}
+
+function acImportAct(key) {
+  const im = acImport;
+  if (!im) return;
+  if (key === "import") { acDoImport(); return; }
+  if (key === "cancel") { closePanel(); return; }
+  if (key === "like") {
+    // The heart is kept on this PC; the service only hears +1 or -1 (docs/ADDONS.md).
+    im.liked = !im.liked;
+    if (im.likes != null) im.likes = Math.max(0, im.likes + (im.liked ? 1 : -1));
+    send({ cmd: "addonLike", key: im.key, on: im.liked });
+    return;
+  }
+  if (key === "mode:add") im.replace = false;
+  else if (key === "mode:replace") im.replace = true;
+  else if (key === "buttons") im.buttons = !im.buttons;
+  else if (key.startsWith("tab:")) im.tab = parseInt(key.slice(4), 10) || 0;
+}
+
+/* LB and RB turn the wheel's tab, wherever the highlight is. */
+function acImportKey(btn) {
+  const p = acImportPlan();
+  if (!p || (btn !== "LB" && btn !== "RB")) return false;
+  if (p.tabs.length > 1) acImport.tab = (acImport.tab + (btn === "LB" ? -1 : 1) + p.tabs.length) % p.tabs.length;
+  return true;
+}
+
+function acImportFoot(key) {
+  const p = acImportPlan(), im = acImport;
+  const a = key === "import" ? "Bring them in" : key === "cancel" ? "Cancel" : key === "like" ? (im && im.liked ? "Unlike" : "Like")
+    : key === "buttons" ? "Switch" : key && key.startsWith("tab:") ? "Show this tab" : "Choose";
+  return [["A", a], ...(p && p.tabs.length > 1 ? [["LB", "Tab before"], ["RB", "Tab after"]] : []), ["B", "Cancel"]];
+}
+
+function acDoImport() {
+  const im = acImport;
+  if (!im || !acImportCounts().placed) return;
+  send({ cmd: "actionsImport", token: im.token, mode: im.replace ? "replace" : "add", buttons: !!im.buttons });
+  closePanel();
+}
+
+/* The host's answer to an import: its actions push came first, so the wheel is already redrawn;
+   this turns it to the first tab the import made. */
+function onImported(m) {
+  const n = (m.added || 0) + (m.restored || 0);
+  toast(`${acCount(n, "action")} brought in${m.skipped ? `, ${m.skipped} already here or left out` : ""}. Undo is under Y, Options`);
+  if (!acActive() || actionsUi.appId !== m.appId) return;
+  const i = acTabs().findIndex(t => t.id === m.tabId);
+  if (i >= 0) acUi.tab = i;
+  settingsPane = "rows";
+  settingsIdx = 0;
+  renderSettings();
+  pulse(document.querySelector(".sc-ring"));
 }
 
 /* ---- editing one ---- */
@@ -720,7 +1084,7 @@ function acPickTab(a, back) {
 function acStartAdd(tab) {
   const app = acApp();
   if (!app || !tab) return;
-  if ((tab.items || []).length >= actionsMaxItems()) { toast(`A tab holds ${actionsMaxItems()}. X opens the tab's options, to add another`); return; }
+  if ((tab.items || []).length >= actionsMaxItems()) { toast(`A tab holds ${actionsMaxItems()}. Y opens the options, to add another tab`); return; }
   const spare = app.spare || [];
   if (!spare.length) { acNewAction(tab, null); return; }
   const again = () => acStartAdd(tab);
@@ -811,6 +1175,7 @@ function onActionApps(m) {
   }
   items.push({ cat: "OR" });
   items.push({ label: "Browse for a program…", icon: "folder", sub: "Pick its .exe", action: () => send({ cmd: "actionAppBrowse" }) });
+  items.push({ label: "A file of actions…", icon: "download", sub: "A wheel someone saved: the program it is for is added with it", action: () => acImportFileFromGrid() });
   openChoice("Add an app", items);
 }
 
@@ -851,7 +1216,7 @@ function actionsTileEl(idx) {
 
 function actionsTileHtml(row) {
   if (row.add) {
-    return `<div class="app-icon app-add">${iconSvg("plus")}</div><div class="app-name">Add an app</div><div class="app-sub">Open now, or browse</div>`;
+    return `<div class="app-icon app-add">${iconSvg("plus")}</div><div class="app-name">Add an app</div><div class="app-sub">Open now, browse, or a file</div>`;
   }
   const app = row.app;
   const list = appActions(app);
