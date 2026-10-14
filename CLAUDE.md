@@ -1415,6 +1415,14 @@ Stop the scrolled grid from clipping through the All games header
   (`wheelHome`). The right stick sends real wheel events, which go to whatever is under the hidden
   cursor; Classic's grid is only the bottom half of the screen, so the stick usually scrolled
   nothing there. A wheel over a real scroller is left to the browser.
+- **The overlay in front owns the stick, scope or not** (`frontOverlay` in `wheelHome`; the user's
+  report, Oct 14 2026). `Nav.activeScope` only sees overlays with `data-focus-scope`, and the guide
+  card (release notes, couch guide), the confirm and the wheels have none, so it looked through the
+  release notes to the library: the stick scrolled the library behind them while the D-pad, routed
+  by `guideOpen`, scrolled the notes. A front overlay without a scope now scrolls its own
+  `.ov-scroll`/`.guide-body` or nothing, and the wheel listener's grid jumps skip while any overlay
+  is up. Checked in the preview: notes 0 → 630 with the library still at 0, D-pad still steps them,
+  a confirm leaves the library where it was.
 
 ## Over a game: the foreground and the exit
 

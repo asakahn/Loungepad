@@ -669,6 +669,13 @@ window.addEventListener("wheel", (e) => {
  * own list. A wheel that DOES land on a scroller is left alone, so a real mouse is unaffected.
  */
 function wheelHome() {
+  // What is in front owns the scroll. A card with nothing to highlight (the release notes and the
+  // couch guide, a confirm, the wheels) is no focus scope, so Nav.activeScope looks straight
+  // through it to the library -- and the stick scrolled the library behind the release notes while
+  // the D-pad, routed by guideOpen, scrolled the notes (the user's report, Oct 14 2026). Such a card
+  // scrolls its own body if it has one, and nothing behind it moves.
+  const front = frontOverlay();
+  if (front && !front.hasAttribute("data-focus-scope")) return front.querySelector(".ov-scroll, .guide-body");
   const scope = Nav.activeScope();
   if (!scope) return null;
   if (scope.classList.contains("overlay")) return scope.querySelector(".ov-scroll, .guide-body");
@@ -679,6 +686,12 @@ function wheelHome() {
   if (view === "settings") return $("settingsScroll");
   if (view === "onboarding") return $("onbRows");
   return null;
+}
+
+/** The overlay drawn on top of everything else, or null: overlays stack in document order. */
+function frontOverlay() {
+  const open = document.querySelectorAll(".overlay.active");
+  return open.length ? open[open.length - 1] : null;
 }
 
 function canScrollY(el, dy) {
@@ -744,7 +757,9 @@ function gridJumpRunning(sc, dir) {
 
 window.addEventListener("wheel", (e) => {
   if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || e.ctrlKey) return;
-  if (!searchOpen && Nav.activeScope() === $("screen-library")) {
+  // The library's jumps only for a wheel the library itself takes: not one over a card in front of
+  // it that Nav.activeScope cannot see (see wheelHome).
+  if (!searchOpen && !frontOverlay() && Nav.activeScope() === $("screen-library")) {
     const page = libraryScroller();
     const dir = Math.sign(e.deltaY);
     if (gridJumpRunning(page, dir)) { e.preventDefault(); return; }
