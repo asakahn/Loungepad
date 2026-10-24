@@ -512,6 +512,16 @@ internal static class Program
             mapper.Update(new(1, false, false, default, new(true, "playstation", "DualSense", "test", new() { sThumbLX = -32767 }, 1, 0, 0, 0, 0, false)), 50);
             Check(output.Any(i => i.type == INPUT_MOUSE && (i.u.mi.dwFlags & MOUSEEVENTF_MOVE) != 0)
                 && output.All(i => i.type != INPUT_KEYBOARD), "HID joystick produces mouse movement, not arrow keys");
+
+            output.Clear();
+            using var disabledMapper = new SecureMapper(new InputProfile { KeyboardToggle = "Off", MouseEnabled = false }, new InputInjector(), "Default");
+            var dpadReply = new AgentReply(1, false, true, new() { Gamepad = new() { wButtons = XINPUT_GAMEPAD_DPAD_UP } }, default);
+            disabledMapper.Update(dpadReply, 60);
+            Check(output.Count == 0, "D-pad does not produce arrow keys when mouse mapping is disabled on Default desktop");
+
+            using var winlogonMapper = new SecureMapper(new InputProfile { KeyboardToggle = "Off", MouseEnabled = false }, new InputInjector(), "Winlogon");
+            winlogonMapper.Update(dpadReply, 70);
+            Check(output.Any(i => i.type == INPUT_KEYBOARD && i.u.ki.wVk == VK_UP), "D-pad produces arrow keys for navigation on Winlogon desktop even when mouse is disabled");
         }
         finally { NativeMethods.InputSink = original; }
     }
